@@ -255,3 +255,19 @@ export interface SnapshotDiffResult {
   type_stats_diff: Record<QualityEventType, number>
   status_stats_diff: Record<EventStatus, number>
 }
+
+export type SchemeAuditActionType = 'create' | 'update' | 'rename' | 'delete' | 'switch'
+
+export interface SchemeAuditLog {
+  id: string
+  action: SchemeAuditActionType
+  scheme_id: string
+  scheme_name: string
+  operator: string
+  operated_at: Date
+  old_rules?: QualityRule
+  new_rules?: QualityRule
+  old_name?: string
+  new_name?: string
+  note?: string
+}

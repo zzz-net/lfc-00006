@@ -7,8 +7,9 @@ import { validateAllRules } from '@/utils/ruleValidator'
 import {
   Timer, StarOff, Repeat, Banknote, Save, AlertCircle, CheckCircle2,
   FolderOpen, Plus, Trash2, ChevronDown, RefreshCw, Edit3, Check, X,
-  AlertTriangle, Bookmark,
+  AlertTriangle, Bookmark, History, Clock, User, FileText, ArrowRight,
 } from 'lucide-react'
+import type { SchemeAuditLog } from '@/types'
 import { cn } from '@/lib/utils'
 import dayjs from 'dayjs'
 import type { QualityRule, ValidationResult, RuleScheme } from '@/types'
@@ -39,6 +40,7 @@ export default function RulesPage() {
   const activeSchemeId = useAppStore((s) => s.activeSchemeId)
   const activeScheme = useAppStore((s) => s.getActiveScheme())
   const isSchemeDirty = useAppStore((s) => s.isSchemeDirty())
+  const auditLogs = useAppStore((s) => s.schemeAuditLogs)
 
   const [schemeDropdownOpen, setSchemeDropdownOpen] = useState(false)
   const [showSaveSchemeModal, setShowSaveSchemeModal] = useState(false)
@@ -471,6 +473,102 @@ export default function RulesPage() {
               </div>
             )
           })}
+        </section>
+
+        <section className="bg-white/85 backdrop-blur-sm rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 bg-gradient-to-r from-slate-50/50 to-transparent">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center shadow-md">
+                  <History className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-800">方案变更审计</h3>
+                  <p className="text-xs text-slate-500">记录每次方案的创建、更新、切换、删除、重命名操作</p>
+                </div>
+              </div>
+              <span className="text-xs text-slate-400">
+                共 {auditLogs.length} 条记录
+              </span>
+            </div>
+          </div>
+          <div className="p-6">
+            {auditLogs.length === 0 ? (
+              <div className="text-center py-8 text-slate-400">
+                <FileText className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="text-sm">暂无变更记录</p>
+                <p className="text-xs">对方案进行操作后，变更记录将显示在这里</p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-80 overflow-y-auto">
+                {auditLogs.slice(0, 20).map((log) => (
+                  <div key={log.id} className="flex items-start gap-3 p-3 rounded-xl border border-slate-100 bg-slate-50/50">
+                    <div className={cn(
+                      'w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
+                      log.action === 'create' && 'bg-emerald-100 text-emerald-600',
+                      log.action === 'update' && 'bg-blue-100 text-blue-600',
+                      log.action === 'switch' && 'bg-violet-100 text-violet-600',
+                      log.action === 'delete' && 'bg-red-100 text-red-600',
+                      log.action === 'rename' && 'bg-amber-100 text-amber-600',
+                    )}>
+                      {log.action === 'create' && <Plus className="w-4 h-4" />}
+                      {log.action === 'update' && <RefreshCw className="w-4 h-4" />}
+                      {log.action === 'switch' && <ArrowRight className="w-4 h-4" />}
+                      {log.action === 'delete' && <Trash2 className="w-4 h-4" />}
+                      {log.action === 'rename' && <Edit3 className="w-4 h-4" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-medium text-slate-800">
+                          {log.action === 'create' && '创建方案'}
+                          {log.action === 'update' && '更新方案'}
+                          {log.action === 'switch' && '切换方案'}
+                          {log.action === 'delete' && '删除方案'}
+                          {log.action === 'rename' && '重命名方案'}
+                        </span>
+                        <span className="text-xs font-mono text-slate-500">
+                          [{log.scheme_name}]
+                        </span>
+                      </div>
+                      {log.note && (
+                        <p className="text-xs text-slate-600">{log.note}</p>
+                      )}
+                      <div className="flex items-center gap-4 mt-2 text-[11px] text-slate-400">
+                        <span className="inline-flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {dayjs(log.operated_at).format('YYYY-MM-DD HH:mm:ss')}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <User className="w-3 h-3" />
+                          {log.operator}
+                        </span>
+                      </div>
+                      {(log.old_rules || log.new_rules) && (
+                        <div className="mt-2 p-2 rounded-lg bg-white border border-slate-100 text-[11px] font-mono">
+                          {log.old_rules && (
+                            <div>
+                              <span className="text-slate-400">变更前：</span>
+                              <span className="text-slate-600">
+                                超时{log.old_rules.timeout_hours}h/低{log.old_rules.min_score}/重{log.old_rules.repeat_days}天{log.old_rules.repeat_count}次/退¥{log.old_rules.high_refund_amount}
+                              </span>
+                            </div>
+                          )}
+                          {log.new_rules && (
+                            <div className="mt-1">
+                              <span className="text-slate-400">变更后：</span>
+                              <span className="text-emerald-600">
+                                超时{log.new_rules.timeout_hours}h/低{log.new_rules.min_score}/重{log.new_rules.repeat_days}天{log.new_rules.repeat_count}次/退¥{log.new_rules.high_refund_amount}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
 
         <div className="flex justify-center pt-2">

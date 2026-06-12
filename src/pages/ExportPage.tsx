@@ -17,8 +17,19 @@ import {
   CheckCircle2,
   Camera,
   Bookmark,
+  History,
+  Clock,
+  User,
+  FileText,
+  Plus,
+  Trash2,
+  RefreshCw,
+  Edit3,
+  ArrowRight,
 } from 'lucide-react'
+import type { SchemeAuditLog } from '@/types'
 import { cn } from '@/lib/utils'
+import dayjs from 'dayjs'
 import type { EventStatus, QualityEventType } from '@/types'
 
 const STATUS_OPTIONS: { value: EventStatus; label: string; color: string }[] = [
@@ -44,6 +55,9 @@ export default function ExportPage() {
   const restoreFromBackup = useAppStore((s) => s.restoreFromBackup)
   const activeScheme = useAppStore((s) => s.getActiveScheme())
   const isSchemeDirty = useAppStore((s) => s.isSchemeDirty())
+  const latestAuditLog = useAppStore((s) => s.getLatestSchemeAuditLog())
+  const auditLogs = useAppStore((s) => s.schemeAuditLogs)
+  const rules = useAppStore((s) => s.rules)
   const toast = useToast()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -175,6 +189,9 @@ export default function ExportPage() {
         let msg = `数据恢复成功：恢复了 ${result.eventCount} 个质量事件`
         if (result.snapshotCount > 0) {
           msg += `，以及 ${result.snapshotCount} 个快照`
+        }
+        if (result.auditLogCount && result.auditLogCount > 0) {
+          msg += `，以及 ${result.auditLogCount} 条审计记录`
         }
         toast.success(msg, 5000)
       } else {
@@ -405,6 +422,183 @@ export default function ExportPage() {
           </div>
         </section>
 
+        {activeScheme && (
+          <section className="bg-white/85 backdrop-blur-sm rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 bg-gradient-to-r from-indigo-50/50 to-transparent">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md">
+                    <Bookmark className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-800">导出方案信息</h3>
+                    <p className="text-xs text-slate-500">当前导出将使用的规则方案与审计信息</p>
+                  </div>
+                </div>
+                {isSchemeDirty && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-xs font-medium border border-amber-200">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    配置已偏离方案，导出将使用当前实际规则
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="p-6">
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                  <p className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">方案名称</p>
+                  <p className="text-sm font-semibold text-slate-800">{activeScheme.name}</p>
+                  {activeScheme.is_default && (
+                    <span className="mt-1 inline-block px-2 py-0.5 rounded text-[10px] bg-slate-200 text-slate-600 font-medium">默认方案</span>
+                  )}
+                </div>
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                  <p className="text-[11px] text-slate-400 uppercase tracking-wider mb-1">方案创建时间</p>
+                  <p className="text-sm font-mono text-slate-700">{dayjs(activeScheme.created_at).format('YYYY-MM-DD HH:mm:ss')}</p>
+                </div>
+              </div>
+              <div className="bg-gradient-to-r from-slate-50 to-indigo-50 rounded-xl p-4 border border-slate-100 mb-4">
+                <p className="text-[11px] text-slate-400 uppercase tracking-wider mb-2">当前实际生效阈值（将写入导出文件）</p>
+                <div className="grid grid-cols-5 gap-3 text-sm">
+                  <div>
+                    <p className="text-xs text-slate-500">超时阈值</p>
+                    <p className="font-mono font-bold text-orange-600">{rules.timeout_hours}h</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">低分阈值</p>
+                    <p className="font-mono font-bold text-rose-600">{rules.min_score}分</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">重复窗口</p>
+                    <p className="font-mono font-bold text-violet-600">{rules.repeat_days}天</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">重复次数</p>
+                    <p className="font-mono font-bold text-violet-600">≥{rules.repeat_count}次</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500">高额退款</p>
+                    <p className="font-mono font-bold text-cyan-600">¥{rules.high_refund_amount}</p>
+                  </div>
+                </div>
+              </div>
+              {latestAuditLog && (
+                <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
+                  <p className="text-[11px] text-emerald-600 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    最近一次方案变更记录（将写入导出文件）
+                  </p>
+                  <div className="flex items-start gap-3">
+                    <div className={cn(
+                      'w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
+                      latestAuditLog.action === 'create' && 'bg-emerald-100 text-emerald-600',
+                      latestAuditLog.action === 'update' && 'bg-blue-100 text-blue-600',
+                      latestAuditLog.action === 'switch' && 'bg-violet-100 text-violet-600',
+                      latestAuditLog.action === 'delete' && 'bg-red-100 text-red-600',
+                      latestAuditLog.action === 'rename' && 'bg-amber-100 text-amber-600',
+                    )}>
+                      {latestAuditLog.action === 'create' && <Plus className="w-4 h-4" />}
+                      {latestAuditLog.action === 'update' && <RefreshCw className="w-4 h-4" />}
+                      {latestAuditLog.action === 'switch' && <ArrowRight className="w-4 h-4" />}
+                      {latestAuditLog.action === 'delete' && <Trash2 className="w-4 h-4" />}
+                      {latestAuditLog.action === 'rename' && <Edit3 className="w-4 h-4" />}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-slate-800">
+                        {latestAuditLog.action === 'create' && '创建方案'}
+                        {latestAuditLog.action === 'update' && '更新方案'}
+                        {latestAuditLog.action === 'switch' && '切换方案'}
+                        {latestAuditLog.action === 'delete' && '删除方案'}
+                        {latestAuditLog.action === 'rename' && '重命名方案'}
+                        <span className="text-slate-500 ml-2">「{latestAuditLog.scheme_name}」</span>
+                      </p>
+                      {latestAuditLog.note && (
+                        <p className="text-xs text-slate-600 mt-0.5">{latestAuditLog.note}</p>
+                      )}
+                      <div className="flex items-center gap-4 mt-1 text-[11px] text-slate-400">
+                        <span className="inline-flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {dayjs(latestAuditLog.operated_at).format('YYYY-MM-DD HH:mm:ss')}
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                          <User className="w-3 h-3" />
+                          {latestAuditLog.operator}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        <section className="bg-white/85 backdrop-blur-sm rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 bg-gradient-to-r from-slate-50/50 to-transparent">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center shadow-md">
+                  <History className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-800">方案变更历史</h3>
+                  <p className="text-xs text-slate-500">所有方案操作的审计记录</p>
+                </div>
+              </div>
+              <span className="text-xs text-slate-400">
+                共 {auditLogs.length} 条记录
+              </span>
+            </div>
+          </div>
+          <div className="p-6">
+            {auditLogs.length === 0 ? (
+              <div className="text-center py-6 text-slate-400">
+                <FileText className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">暂无变更记录</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {auditLogs.slice(0, 10).map((log) => (
+                  <div key={log.id} className="flex items-center gap-3 p-2.5 rounded-lg border border-slate-100 bg-slate-50/50">
+                    <div className={cn(
+                      'w-6 h-6 rounded flex items-center justify-center shrink-0',
+                      log.action === 'create' && 'bg-emerald-100 text-emerald-600',
+                      log.action === 'update' && 'bg-blue-100 text-blue-600',
+                      log.action === 'switch' && 'bg-violet-100 text-violet-600',
+                      log.action === 'delete' && 'bg-red-100 text-red-600',
+                      log.action === 'rename' && 'bg-amber-100 text-amber-600',
+                    )}>
+                      {log.action === 'create' && <Plus className="w-3 h-3" />}
+                      {log.action === 'update' && <RefreshCw className="w-3 h-3" />}
+                      {log.action === 'switch' && <ArrowRight className="w-3 h-3" />}
+                      {log.action === 'delete' && <Trash2 className="w-3 h-3" />}
+                      {log.action === 'rename' && <Edit3 className="w-3 h-3" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-slate-700">
+                        <span className="font-medium">
+                          {log.action === 'create' && '创建'}
+                          {log.action === 'update' && '更新'}
+                          {log.action === 'switch' && '切换'}
+                          {log.action === 'delete' && '删除'}
+                          {log.action === 'rename' && '重命名'}
+                        </span>
+                        <span className="text-slate-500">「{log.scheme_name}」</span>
+                      </p>
+                      {log.note && (
+                        <p className="text-[10px] text-slate-500 truncate">{log.note}</p>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                      {dayjs(log.operated_at).format('MM-DD HH:mm')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
         <section className="bg-white/85 backdrop-blur-sm rounded-2xl border-2 border-dashed border-amber-200 shadow-sm overflow-hidden">
           <div className="px-6 py-5 border-b border-amber-100/50 bg-gradient-to-r from-amber-50/50 to-transparent">
             <div className="flex items-center gap-3">
@@ -518,16 +712,52 @@ export default function ExportPage() {
 
       <ConfirmModal
         open={showDirtyExportConfirm}
-        title="规则配置已偏离方案"
+        title="配置未保存"
         description={
-          <div className="text-sm text-slate-600 space-y-2">
-            <p>当前规则配置与方案「{activeScheme?.name}」不一致。</p>
-            <p>导出文件中将记录当前实际使用的规则，而非方案中的规则。</p>
-            <p className="text-amber-600 font-medium">确定要继续导出吗？</p>
+          <div className="text-sm text-slate-600 space-y-3">
+            <div className="flex items-start gap-3 p-3 bg-amber-50 rounded-xl border border-amber-100">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-amber-800">规则配置已偏离方案</p>
+                <p className="text-xs text-amber-700 mt-1">
+                  当前规则配置与方案「{activeScheme?.name}」中的规则不一致。
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
+                <p className="text-[10px] text-slate-400 uppercase tracking-wider mb-1">方案中的规则</p>
+                <div className="text-xs text-slate-500 space-y-0.5 font-mono">
+                  <p>超时: {activeScheme?.rules.timeout_hours}h</p>
+                  <p>低分: {activeScheme?.rules.min_score}分</p>
+                  <p>重复: {activeScheme?.rules.repeat_days}天≥{activeScheme?.rules.repeat_count}次</p>
+                  <p>退款: ¥{activeScheme?.rules.high_refund_amount}</p>
+                </div>
+              </div>
+              <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+                <p className="text-[10px] text-emerald-500 uppercase tracking-wider mb-1">实际生效规则（将写入导出）</p>
+                <div className="text-xs text-emerald-700 space-y-0.5 font-mono">
+                  <p>超时: {rules.timeout_hours}h {rules.timeout_hours !== activeScheme?.rules.timeout_hours && <span className="text-rose-600">≠</span>}</p>
+                  <p>低分: {rules.min_score}分 {rules.min_score !== activeScheme?.rules.min_score && <span className="text-rose-600">≠</span>}</p>
+                  <p>重复: {rules.repeat_days}天≥{rules.repeat_count}次 {(rules.repeat_days !== activeScheme?.rules.repeat_days || rules.repeat_count !== activeScheme?.rules.repeat_count) && <span className="text-rose-600">≠</span>}</p>
+                  <p>退款: ¥{rules.high_refund_amount} {rules.high_refund_amount !== activeScheme?.rules.high_refund_amount && <span className="text-rose-600">≠</span>}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
+              <p className="text-xs text-blue-700">
+                <CheckCircle2 className="w-3.5 h-3.5 inline mr-1" />
+                导出文件中将同时记录：方案名称、方案创建时间、当前实际规则、以及最近一次方案变更记录，便于后续核对。
+              </p>
+            </div>
+
+            <p className="text-center text-slate-500">确定要继续导出吗？</p>
           </div>
         }
-        confirmText="继续导出"
-        cancelText="取消"
+        confirmText="继续导出（含当前规则）"
+        cancelText="取消（先去保存）"
         variant="danger"
         onConfirm={confirmDirtyExport}
         onCancel={() => { setShowDirtyExportConfirm(false); setPendingExportAction(null) }}

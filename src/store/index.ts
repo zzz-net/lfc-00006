@@ -18,6 +18,8 @@ import type {
   AnalysisSnapshot,
   DeletedSnapshot,
   RuleScheme,
+  SchemeAuditLog,
+  SchemeAuditActionType,
 } from '@/types'
 import { uid } from '@/utils'
 import { runAnalysis } from '@/services/analyzeService'
@@ -77,6 +79,7 @@ interface AppState {
   lastDeletedSnapshot: DeletedSnapshot | null
   schemes: RuleScheme[]
   activeSchemeId: string | null
+  schemeAuditLogs: SchemeAuditLog[]
 
   setSelectedEvent: (id: string | null) => void
   setDrawerOpen: (open: boolean) => void
@@ -99,6 +102,10 @@ interface AppState {
   getActiveScheme: () => RuleScheme | null
   isSchemeDirty: () => boolean
 
+  getSchemeAuditLogs: () => SchemeAuditLog[]
+  getLatestSchemeAuditLog: () => SchemeAuditLog | null
+  getSchemeAuditLogsBySchemeId: (schemeId: string) => SchemeAuditLog[]
+
   updateEventStatus: (eventId: string, status: EventStatus, note?: string) => void
   closeEvent: (eventId: string, note?: string) => void
   batchUpdateStatus: (eventIds: string[], status: EventStatus) => void
@@ -116,7 +123,7 @@ interface AppState {
   exportEvents: (filter: { statuses?: EventStatus[]; types?: QualityEventType[]; includeEvidences: boolean }, format: 'csv' | 'json') => void
   exportEvidences: (filter: { statuses?: EventStatus[]; types?: QualityEventType[] }) => void
   exportFullBackup: () => void
-  restoreFromBackup: (file: File) => Promise<{ eventCount: number; success: boolean; error?: string; hasSnapshots: boolean; snapshotCount: number }>
+  restoreFromBackup: (file: File) => Promise<{ eventCount: number; success: boolean; error?: string; hasSnapshots: boolean; snapshotCount: number; hasAuditLogs: boolean; auditLogCount: number }>
 
   getEventEvidences: (eventId: string) => Evidence[]
 
@@ -179,6 +186,34 @@ const BATCH_ACTION_STATUS_MAP: Record<BatchActionType, EventStatus> = {
   reopen: 'pending',
 }
 
+const OPERATOR = '当前用户'
+
+function createSchemeAuditLog(
+  action: SchemeAuditActionType,
+  scheme: RuleScheme,
+  options: {
+    oldRules?: QualityRule
+    newRules?: QualityRule
+    oldName?: string
+    newName?: string
+    note?: string
+  } = {}
+): SchemeAuditLog {
+  return {
+    id: uid('audit'),
+    action,
+    scheme_id: scheme.id,
+    scheme_name: scheme.name,
+    operator: OPERATOR,
+    operated_at: new Date(),
+    old_rules: options.oldRules ? { ...options.oldRules } : undefined,
+    new_rules: options.newRules ? { ...options.newRules } : undefined,
+    old_name: options.oldName,
+    new_name: options.newName,
+    note: options.note,
+  }
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -199,6 +234,7 @@ export const useAppStore = create<AppState>()(
       lastDeletedSnapshot: null,
       schemes: [createDefaultScheme()],
       activeSchemeId: DEFAULT_SCHEME_ID,
+      schemeAuditLogs: [],
 
       setSelectedEvent: (id) => set((s) => ({ uiState: { ...s.uiState, selectedEventId: id, drawerOpen: id !== null } })),
       setDrawerOpen: (open) => set((s) => ({ uiState: { ...s.uiState, drawerOpen: open } })),
@@ -330,9 +366,14 @@ export const useAppStore = create<AppState>()(
           created_at: now,
           updated_at: now,
         }
+        const auditLog = createSchemeAuditLog('create', newScheme, {
+          newRules: rules,
+          note: '新建方案',
+        })
         set((s) => ({
           schemes: [...s.schemes, newScheme],
           activeSchemeId: newScheme.id,
+          schemeAuditLogs: [auditLog, ...s.schemeAuditLogs],
         }))
         return { success: true, scheme: newScheme }
       },
@@ -343,26 +384,41 @@ export const useAppStore = create<AppState>()(
         if (!scheme) {
           return { success: false, error: '方案不存在' }
         }
+        const oldRules = { ...scheme.rules }
         const now = new Date()
+        const updatedScheme = { ...scheme, rules: { ...rules }, updated_at: now }
+        const auditLog = createSchemeAuditLog('update', updatedScheme, {
+          oldRules,
+          newRules: rules,
+          note: '更新方案规则',
+        })
         set((s) => ({
           schemes: s.schemes.map((sc) =>
-            sc.id === schemeId ? { ...sc, rules: { ...rules }, updated_at: now } : sc
+            sc.id === schemeId ? updatedScheme : sc
           ),
           rules: { ...rules },
+          schemeAuditLogs: [auditLog, ...s.schemeAuditLogs],
         }))
         get().runAnalysis()
         return { success: true }
       },
 
       loadScheme: (schemeId) => {
-        const { schemes } = get()
+        const { schemes, activeSchemeId } = get()
         const scheme = schemes.find((s) => s.id === schemeId)
         if (!scheme) {
           return { success: false, error: '方案不存在' }
         }
+        const oldActiveScheme = schemes.find((s) => s.id === activeSchemeId)
+        const auditLog = createSchemeAuditLog('switch', scheme, {
+          oldRules: oldActiveScheme?.rules,
+          newRules: scheme.rules,
+          note: oldActiveScheme ? `从方案「${oldActiveScheme.name}」切换` : '切换方案',
+        })
         set({
           rules: { ...scheme.rules },
           activeSchemeId: schemeId,
+          schemeAuditLogs: [auditLog, ...get().schemeAuditLogs],
         })
         get().runAnalysis()
         return { success: true }
@@ -377,6 +433,10 @@ export const useAppStore = create<AppState>()(
         if (scheme.is_default) {
           return { success: false, error: '默认方案不能被删除' }
         }
+        const auditLog = createSchemeAuditLog('delete', scheme, {
+          oldRules: scheme.rules,
+          note: '删除方案',
+        })
         const newSchemes = schemes.filter((s) => s.id !== schemeId)
         const newActiveId = activeSchemeId === schemeId ? DEFAULT_SCHEME_ID : activeSchemeId
         const newActiveScheme = newSchemes.find((s) => s.id === newActiveId)
@@ -384,6 +444,7 @@ export const useAppStore = create<AppState>()(
           schemes: newSchemes,
           activeSchemeId: newActiveId,
           rules: activeSchemeId === schemeId && newActiveScheme ? { ...newActiveScheme.rules } : s.rules,
+          schemeAuditLogs: [auditLog, ...s.schemeAuditLogs],
         }))
         if (activeSchemeId === schemeId) {
           get().runAnalysis()
@@ -400,10 +461,22 @@ export const useAppStore = create<AppState>()(
         if (schemes.some((s) => s.id !== schemeId && s.name === trimmed)) {
           return { success: false, error: '已存在同名方案，请使用其他名称' }
         }
+        const oldScheme = schemes.find((s) => s.id === schemeId)
+        if (!oldScheme) {
+          return { success: false, error: '方案不存在' }
+        }
+        const oldName = oldScheme.name
+        const updatedScheme = { ...oldScheme, name: trimmed, updated_at: new Date() }
+        const auditLog = createSchemeAuditLog('rename', updatedScheme, {
+          oldName,
+          newName: trimmed,
+          note: `重命名方案：「${oldName}」→「${trimmed}」`,
+        })
         set((s) => ({
           schemes: s.schemes.map((sc) =>
-            sc.id === schemeId ? { ...sc, name: trimmed, updated_at: new Date() } : sc
+            sc.id === schemeId ? updatedScheme : sc
           ),
+          schemeAuditLogs: [auditLog, ...s.schemeAuditLogs],
         }))
         return { success: true }
       },
@@ -418,6 +491,19 @@ export const useAppStore = create<AppState>()(
         const active = schemes.find((s) => s.id === activeSchemeId)
         if (!active) return true
         return !rulesEqual(rules, active.rules)
+      },
+
+      getSchemeAuditLogs: () => {
+        return get().schemeAuditLogs
+      },
+
+      getLatestSchemeAuditLog: () => {
+        const logs = get().schemeAuditLogs
+        return logs.length > 0 ? logs[0] : null
+      },
+
+      getSchemeAuditLogsBySchemeId: (schemeId) => {
+        return get().schemeAuditLogs.filter((log) => log.scheme_id === schemeId)
       },
 
       updateEventStatus: (eventId, status, note) => {
@@ -606,17 +692,24 @@ export const useAppStore = create<AppState>()(
       },
 
       exportEvents: (filter, format) => {
-        const { events, evidences } = get()
+        const { events, evidences, rules } = get()
         const activeScheme = get().getActiveScheme()
+        const latestAuditLog = get().getLatestSchemeAuditLog()
         const schemeInfo = activeScheme ? {
           scheme_name: activeScheme.name,
           scheme_id: activeScheme.id,
           scheme_created_at: activeScheme.created_at.toISOString(),
-          timeout_hours: activeScheme.rules.timeout_hours,
-          min_score: activeScheme.rules.min_score,
-          repeat_days: activeScheme.rules.repeat_days,
-          repeat_count: activeScheme.rules.repeat_count,
-          high_refund_amount: activeScheme.rules.high_refund_amount,
+          scheme_updated_at: activeScheme.updated_at.toISOString(),
+          timeout_hours: rules.timeout_hours,
+          min_score: rules.min_score,
+          repeat_days: rules.repeat_days,
+          repeat_count: rules.repeat_count,
+          high_refund_amount: rules.high_refund_amount,
+          is_dirty: get().isSchemeDirty(),
+          latest_audit_action: latestAuditLog?.action,
+          latest_audit_at: latestAuditLog?.operated_at.toISOString(),
+          latest_audit_operator: latestAuditLog?.operator,
+          latest_audit_note: latestAuditLog?.note,
         } : undefined
         const { filteredEvents, filteredEvidences } = buildExportFilteredEvents(events, evidences, filter)
         const ts = dayjs().format('YYYYMMDD_HHmmss')
@@ -690,6 +783,10 @@ export const useAppStore = create<AppState>()(
             updated_at: sc.updated_at.toISOString(),
           })),
           activeSchemeId: state.activeSchemeId,
+          schemeAuditLogs: state.schemeAuditLogs.map((log) => ({
+            ...log,
+            operated_at: log.operated_at.toISOString(),
+          })),
         })
         const ts = dayjs().format('YYYYMMDD_HHmmss')
         downloadBlob(new Blob([backup], { type: 'application/json' }), `full_backup_${ts}.json`)
@@ -699,7 +796,7 @@ export const useAppStore = create<AppState>()(
         try {
           const text = await file.text()
           const parsed = parseFullBackup(text)
-          if (!parsed) return { eventCount: 0, success: false, error: '备份文件格式无效', hasSnapshots: false, snapshotCount: 0 }
+          if (!parsed) return { eventCount: 0, success: false, error: '备份文件格式无效', hasSnapshots: false, snapshotCount: 0, hasAuditLogs: false, auditLogCount: 0 }
 
           const s = reviveDates(parsed) as any
           const tickets: CustomerTicket[] = s.tickets || []
@@ -714,6 +811,7 @@ export const useAppStore = create<AppState>()(
           const lastDeletedSnapshot: DeletedSnapshot | null = s.lastDeletedSnapshot || null
           const restoredSchemes: RuleScheme[] = s.schemes || []
           const restoredActiveSchemeId: string | null = s.activeSchemeId || null
+          const restoredAuditLogs: SchemeAuditLog[] = s.schemeAuditLogs || []
 
           const hasDefaultScheme = restoredSchemes.some((sc: RuleScheme) => sc.is_default)
           const schemes = hasDefaultScheme ? restoredSchemes : [createDefaultScheme(), ...restoredSchemes]
@@ -734,15 +832,18 @@ export const useAppStore = create<AppState>()(
             lastDeletedSnapshot,
             schemes,
             activeSchemeId,
+            schemeAuditLogs: restoredAuditLogs,
           })
           return {
             eventCount: events.length,
             success: true,
             hasSnapshots: snapshots.length > 0,
             snapshotCount: snapshots.length,
+            hasAuditLogs: restoredAuditLogs.length > 0,
+            auditLogCount: restoredAuditLogs.length,
           }
         } catch (e: any) {
-          return { eventCount: 0, success: false, error: e?.message || '恢复失败', hasSnapshots: false, snapshotCount: 0 }
+          return { eventCount: 0, success: false, error: e?.message || '恢复失败', hasSnapshots: false, snapshotCount: 0, hasAuditLogs: false, auditLogCount: 0 }
         }
       },
 
@@ -860,6 +961,7 @@ export const useAppStore = create<AppState>()(
           lastDeletedSnapshot: null,
           schemes: [createDefaultScheme()],
           activeSchemeId: DEFAULT_SCHEME_ID,
+          schemeAuditLogs: [],
         })
       },
     }),
@@ -879,6 +981,7 @@ export const useAppStore = create<AppState>()(
         lastDeletedSnapshot: state.lastDeletedSnapshot,
         schemes: state.schemes,
         activeSchemeId: state.activeSchemeId,
+        schemeAuditLogs: state.schemeAuditLogs,
       }),
     }
   )

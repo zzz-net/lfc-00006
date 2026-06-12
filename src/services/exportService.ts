@@ -29,7 +29,7 @@ export function buildExportFilteredEvents(
   return { filteredEvents, filteredEvidences };
 }
 
-export function eventsToCSV(events: QualityEvent[], schemeInfo?: Record<string, string | number>): string {
+export function eventsToCSV(events: QualityEvent[], schemeInfo?: Record<string, string | number | boolean | undefined>): string {
   const columns = [
     'id',
     'customer_id',
@@ -46,11 +46,17 @@ export function eventsToCSV(events: QualityEvent[], schemeInfo?: Record<string, 
     'scheme_name',
     'scheme_id',
     'scheme_created_at',
+    'scheme_updated_at',
     'scheme_timeout_hours',
     'scheme_min_score',
     'scheme_repeat_days',
     'scheme_repeat_count',
     'scheme_high_refund_amount',
+    'scheme_is_dirty',
+    'latest_audit_action',
+    'latest_audit_at',
+    'latest_audit_operator',
+    'latest_audit_note',
   ];
   const rows = events.map(e => ({
     id: e.id,
@@ -68,11 +74,17 @@ export function eventsToCSV(events: QualityEvent[], schemeInfo?: Record<string, 
     scheme_name: String(schemeInfo?.scheme_name ?? ''),
     scheme_id: String(schemeInfo?.scheme_id ?? ''),
     scheme_created_at: String(schemeInfo?.scheme_created_at ?? ''),
+    scheme_updated_at: String(schemeInfo?.scheme_updated_at ?? ''),
     scheme_timeout_hours: String(schemeInfo?.timeout_hours ?? ''),
     scheme_min_score: String(schemeInfo?.min_score ?? ''),
     scheme_repeat_days: String(schemeInfo?.repeat_days ?? ''),
     scheme_repeat_count: String(schemeInfo?.repeat_count ?? ''),
     scheme_high_refund_amount: String(schemeInfo?.high_refund_amount ?? ''),
+    scheme_is_dirty: String(schemeInfo?.is_dirty ?? ''),
+    latest_audit_action: String(schemeInfo?.latest_audit_action ?? ''),
+    latest_audit_at: String(schemeInfo?.latest_audit_at ?? ''),
+    latest_audit_operator: String(schemeInfo?.latest_audit_operator ?? ''),
+    latest_audit_note: String(schemeInfo?.latest_audit_note ?? ''),
   }));
   return toCSV(rows, columns);
 }
@@ -81,9 +93,9 @@ export function eventsToJSON(
   events: QualityEvent[],
   evidences: Evidence[],
   includeEvidences: boolean,
-  schemeInfo?: Record<string, string | number>
+  schemeInfo?: Record<string, string | number | boolean | undefined>
 ): string {
-  const data: { exported_at: string; event_count: number; events: unknown[]; evidence_count?: number; evidences?: unknown[]; scheme?: Record<string, string | number> } = {
+  const data: { exported_at: string; event_count: number; events: unknown[]; evidence_count?: number; evidences?: unknown[]; scheme?: Record<string, string | number | boolean | undefined> } = {
     exported_at: dayjs().toISOString(),
     event_count: events.length,
     events: events.map(e => ({
@@ -99,11 +111,17 @@ export function eventsToJSON(
       scheme_name: String(schemeInfo.scheme_name ?? ''),
       scheme_id: String(schemeInfo.scheme_id ?? ''),
       scheme_created_at: String(schemeInfo.scheme_created_at ?? ''),
+      scheme_updated_at: String(schemeInfo.scheme_updated_at ?? ''),
       timeout_hours: schemeInfo.timeout_hours ?? '',
       min_score: schemeInfo.min_score ?? '',
       repeat_days: schemeInfo.repeat_days ?? '',
       repeat_count: schemeInfo.repeat_count ?? '',
       high_refund_amount: schemeInfo.high_refund_amount ?? '',
+      is_dirty: schemeInfo.is_dirty ?? false,
+      latest_audit_action: schemeInfo.latest_audit_action ?? '',
+      latest_audit_at: schemeInfo.latest_audit_at ?? '',
+      latest_audit_operator: schemeInfo.latest_audit_operator ?? '',
+      latest_audit_note: schemeInfo.latest_audit_note ?? '',
     };
   }
   if (includeEvidences) {
