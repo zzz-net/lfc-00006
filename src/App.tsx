@@ -4,6 +4,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import ImportPage from "@/pages/ImportPage";
 import RulesPage from "@/pages/RulesPage";
 import ReviewPage from "@/pages/ReviewPage";
+import SnapshotsPage from "@/pages/SnapshotsPage";
 import ExportPage from "@/pages/ExportPage";
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
           <Route path="/import" element={<ImportPage />} />
           <Route path="/rules" element={<RulesPage />} />
           <Route path="/review" element={<ReviewPage />} />
+          <Route path="/snapshots" element={<SnapshotsPage />} />
           <Route path="/export" element={<ExportPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

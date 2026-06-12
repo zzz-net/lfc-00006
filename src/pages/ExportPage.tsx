@@ -2,6 +2,7 @@ import { useState, useMemo, useRef } from 'react'
 import AppLayout from '@/components/layout/AppLayout'
 import { useAppStore } from '@/store'
 import { useToast } from '@/components/ToastProvider'
+import ConfirmModal from '@/components/ui/ConfirmModal'
 import { buildExportFilteredEvents } from '@/services/exportService'
 import {
   Download,
@@ -14,6 +15,7 @@ import {
   FileCheck,
   Shield,
   CheckCircle2,
+  Camera,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { EventStatus, QualityEventType } from '@/types'
@@ -34,6 +36,7 @@ const TYPE_OPTIONS: { value: QualityEventType; label: string; color: string }[] 
 export default function ExportPage() {
   const events = useAppStore((s) => s.events)
   const evidences = useAppStore((s) => s.evidences)
+  const snapshots = useAppStore((s) => s.snapshots)
   const exportEvents = useAppStore((s) => s.exportEvents)
   const exportEvidences = useAppStore((s) => s.exportEvidences)
   const exportFullBackup = useAppStore((s) => s.exportFullBackup)
@@ -46,6 +49,9 @@ export default function ExportPage() {
   const [includeEvidences, setIncludeEvidences] = useState(true)
   const [format, setFormat] = useState<'csv' | 'json'>('csv')
   const [restoring, setRestoring] = useState(false)
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
+  const [pendingRestoreFile, setPendingRestoreFile] = useState<File | null>(null)
+  const [restorePreview, setRestorePreview] = useState<{ eventCount: number; snapshotCount: number } | null>(null)
 
   const toggleStatus = (s: EventStatus) => {
     setSelectedStatuses((prev) => {
@@ -108,11 +114,39 @@ export default function ExportPage() {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    setRestoring(true)
+
     try {
-      const result = await restoreFromBackup(file)
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      const state = parsed?.state || {}
+
+      const eventCount = state.events?.length || 0
+      const snapshotCount = state.snapshots?.length || 0
+
+      setPendingRestoreFile(file)
+      setRestorePreview({ eventCount, snapshotCount })
+      setShowRestoreConfirm(true)
+    } catch {
+      toast.error('备份文件格式无效')
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const handleConfirmRestore = async () => {
+    if (!pendingRestoreFile) return
+
+    setRestoring(true)
+    setShowRestoreConfirm(false)
+
+    try {
+      const result = await restoreFromBackup(pendingRestoreFile)
       if (result.success) {
-        toast.success(`数据恢复成功：恢复了 ${result.eventCount} 个质量事件`, 5000)
+        let msg = `数据恢复成功：恢复了 ${result.eventCount} 个质量事件`
+        if (result.snapshotCount > 0) {
+          msg += `，以及 ${result.snapshotCount} 个快照`
+        }
+        toast.success(msg, 5000)
       } else {
         toast.error(`恢复失败：${result.error || '未知错误'}`)
       }
@@ -120,8 +154,15 @@ export default function ExportPage() {
       toast.error(`恢复失败：${err?.message || '未知错误'}`)
     } finally {
       setRestoring(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      setPendingRestoreFile(null)
+      setRestorePreview(null)
     }
+  }
+
+  const handleCancelRestore = () => {
+    setShowRestoreConfirm(false)
+    setPendingRestoreFile(null)
+    setRestorePreview(null)
   }
 
   return (
@@ -274,6 +315,15 @@ export default function ExportPage() {
                   <p className="text-[11px] text-slate-400 mb-0.5">条证据</p>
                   <p className="text-2xl font-bold font-mono text-blue-300">{preview.evidenceCount}</p>
                 </div>
+                {snapshots.length > 0 && (
+                  <>
+                    <div className="w-px h-10 bg-white/10" />
+                    <div className="text-right">
+                      <p className="text-[11px] text-slate-400 mb-0.5">个快照</p>
+                      <p className="text-2xl font-bold font-mono text-violet-300">{snapshots.length}</p>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -364,6 +414,65 @@ export default function ExportPage() {
           </div>
         </section>
       </div>
+
+      <ConfirmModal
+        open={showRestoreConfirm}
+        title="确认恢复备份？"
+        description={
+          <div className="text-left space-y-3">
+            <p className="text-sm text-slate-600">
+              此操作将<span className="font-bold text-red-600">覆盖当前所有数据</span>，包括：
+            </p>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-slate-600">工单、评分、退款数据</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-slate-600">质量事件与证据</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-slate-600">规则配置</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-slate-600">导入历史记录</span>
+              </div>
+            </div>
+
+            {restorePreview && (
+              <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                <p className="text-xs font-semibold text-slate-600 mb-2">备份文件包含：</p>
+                <div className="flex gap-4 text-sm">
+                  <div>
+                    <span className="text-slate-500">事件：</span>
+                    <span className="font-bold text-slate-700">{restorePreview.eventCount} 个</span>
+                  </div>
+                  {restorePreview.snapshotCount > 0 && (
+                    <div className="flex items-center gap-1">
+                      <Camera className="w-3.5 h-3.5 text-violet-500" />
+                      <span className="text-slate-500">快照：</span>
+                      <span className="font-bold text-violet-700">{restorePreview.snapshotCount} 个</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded border border-amber-100">
+              <AlertTriangle className="w-3.5 h-3.5 inline mr-1" />
+              建议在恢复前先导出当前数据作为备份。
+            </p>
+          </div>
+        }
+        confirmText="确认恢复"
+        cancelText="取消"
+        variant="danger"
+        onConfirm={handleConfirmRestore}
+        onCancel={handleCancelRestore}
+      />
     </AppLayout>
   )
 }

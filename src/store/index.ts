@@ -15,12 +15,15 @@ import type {
   BatchActionTarget,
   BatchActionSkipReason,
   BatchOperation,
+  AnalysisSnapshot,
+  DeletedSnapshot,
 } from '@/types'
 import { uid } from '@/utils'
 import { runAnalysis } from '@/services/analyzeService'
 import { importTicketsFile, importScoresFile, importRefundsFile } from '@/services/importService'
 import { generateSampleFiles } from '@/sample/generator'
 import { buildExportFilteredEvents, eventsToCSV, eventsToJSON, evidencesToCSV, buildFullBackup, parseFullBackup, downloadBlob } from '@/services/exportService'
+import { createSnapshot, generateUniqueSnapshotName, isSnapshotEmpty, snapshotsAreEqual } from '@/services/snapshotService'
 import { parseDate } from '@/utils'
 import dayjs from 'dayjs'
 
@@ -48,6 +51,8 @@ interface AppState {
   rules: QualityRule
   uiState: UIState
   lastBatchOperation: BatchOperation | null
+  snapshots: AnalysisSnapshot[]
+  lastDeletedSnapshot: DeletedSnapshot | null
 
   setSelectedEvent: (id: string | null) => void
   setDrawerOpen: (open: boolean) => void
@@ -79,9 +84,15 @@ interface AppState {
   exportEvents: (filter: { statuses?: EventStatus[]; types?: QualityEventType[]; includeEvidences: boolean }, format: 'csv' | 'json') => void
   exportEvidences: (filter: { statuses?: EventStatus[]; types?: QualityEventType[] }) => void
   exportFullBackup: () => void
-  restoreFromBackup: (file: File) => Promise<{ eventCount: number; success: boolean; error?: string }>
+  restoreFromBackup: (file: File) => Promise<{ eventCount: number; success: boolean; error?: string; hasSnapshots: boolean; snapshotCount: number }>
 
   getEventEvidences: (eventId: string) => Evidence[]
+
+  saveAnalysisSnapshot: (name?: string, description?: string) => { success: boolean; snapshot?: AnalysisSnapshot; error?: string; isDuplicate?: boolean; isEmpty?: boolean }
+  deleteSnapshot: (snapshotId: string) => { success: boolean; message: string }
+  undoDeleteSnapshot: () => { success: boolean; snapshot?: AnalysisSnapshot; message: string }
+  canUndoDeleteSnapshot: () => boolean
+  renameSnapshot: (snapshotId: string, newName: string) => { success: boolean; error?: string }
 
   resetAll: () => void
 }
@@ -152,6 +163,8 @@ export const useAppStore = create<AppState>()(
         lastAnalysisAt: null,
       },
       lastBatchOperation: null,
+      snapshots: [],
+      lastDeletedSnapshot: null,
 
       setSelectedEvent: (id) => set((s) => ({ uiState: { ...s.uiState, selectedEventId: id, drawerOpen: id !== null } })),
       setDrawerOpen: (open) => set((s) => ({ uiState: { ...s.uiState, drawerOpen: open } })),
@@ -491,6 +504,31 @@ export const useAppStore = create<AppState>()(
           evidences: state.evidences.map((ev) => ({ ...ev, occurred_at: ev.occurred_at.toISOString() })),
           importRecords: state.importRecords.map((r) => ({ ...r, imported_at: r.imported_at.toISOString() })),
           rules: state.rules,
+          lastBatchOperation: state.lastBatchOperation
+            ? {
+                ...state.lastBatchOperation,
+                executedAt: state.lastBatchOperation.executedAt.toISOString(),
+                targets: state.lastBatchOperation.targets.map((t) => ({
+                  ...t,
+                  originalReviewedAt: t.originalReviewedAt?.toISOString() || null,
+                  originalClosedAt: t.originalClosedAt?.toISOString() || null,
+                })),
+              }
+            : null,
+          snapshots: state.snapshots.map((snap) => ({
+            ...snap,
+            created_at: snap.created_at.toISOString(),
+          })),
+          lastDeletedSnapshot: state.lastDeletedSnapshot
+            ? {
+                ...state.lastDeletedSnapshot,
+                deleted_at: state.lastDeletedSnapshot.deleted_at.toISOString(),
+                snapshot: {
+                  ...state.lastDeletedSnapshot.snapshot,
+                  created_at: state.lastDeletedSnapshot.snapshot.created_at.toISOString(),
+                },
+              }
+            : null,
         })
         const ts = dayjs().format('YYYYMMDD_HHmmss')
         downloadBlob(new Blob([backup], { type: 'application/json' }), `full_backup_${ts}.json`)
@@ -500,7 +538,7 @@ export const useAppStore = create<AppState>()(
         try {
           const text = await file.text()
           const parsed = parseFullBackup(text)
-          if (!parsed) return { eventCount: 0, success: false, error: '备份文件格式无效' }
+          if (!parsed) return { eventCount: 0, success: false, error: '备份文件格式无效', hasSnapshots: false, snapshotCount: 0 }
 
           const s = reviveDates(parsed) as any
           const tickets: CustomerTicket[] = s.tickets || []
@@ -510,16 +548,125 @@ export const useAppStore = create<AppState>()(
           const evidences: Evidence[] = s.evidences || []
           const importRecords: ImportRecord[] = s.importRecords || []
           const rules: QualityRule = s.rules || { ...DEFAULT_RULES }
+          const lastBatchOperation: BatchOperation | null = s.lastBatchOperation || null
+          const snapshots: AnalysisSnapshot[] = s.snapshots || []
+          const lastDeletedSnapshot: DeletedSnapshot | null = s.lastDeletedSnapshot || null
 
-          set({ tickets, scores, refunds, events, evidences, importRecords, rules })
-          return { eventCount: events.length, success: true }
+          set({
+            tickets,
+            scores,
+            refunds,
+            events,
+            evidences,
+            importRecords,
+            rules,
+            lastBatchOperation,
+            snapshots,
+            lastDeletedSnapshot,
+          })
+          return {
+            eventCount: events.length,
+            success: true,
+            hasSnapshots: snapshots.length > 0,
+            snapshotCount: snapshots.length,
+          }
         } catch (e: any) {
-          return { eventCount: 0, success: false, error: e?.message || '恢复失败' }
+          return { eventCount: 0, success: false, error: e?.message || '恢复失败', hasSnapshots: false, snapshotCount: 0 }
         }
       },
 
       getEventEvidences: (eventId) => {
         return get().evidences.filter((ev) => ev.event_id === eventId)
+      },
+
+      saveAnalysisSnapshot: (name, description) => {
+        const { events, rules, importRecords, snapshots } = get()
+
+        const existingNames = snapshots.map((s) => s.name)
+        const snapshotName = generateUniqueSnapshotName(existingNames, name)
+
+        const newSnapshot = createSnapshot(snapshotName, description, events, rules, importRecords)
+
+        if (isSnapshotEmpty(newSnapshot)) {
+          return { success: false, error: '当前没有数据和事件，无法保存空快照', isEmpty: true }
+        }
+
+        for (const existing of snapshots) {
+          if (snapshotsAreEqual(existing, newSnapshot)) {
+            return { success: false, snapshot: existing, error: '当前状态与已有快照内容相同', isDuplicate: true }
+          }
+        }
+
+        set((s) => ({
+          snapshots: [newSnapshot, ...s.snapshots],
+        }))
+
+        return { success: true, snapshot: newSnapshot }
+      },
+
+      deleteSnapshot: (snapshotId) => {
+        const { snapshots } = get()
+        const snapshot = snapshots.find((s) => s.id === snapshotId)
+
+        if (!snapshot) {
+          return { success: false, message: '快照不存在' }
+        }
+
+        const deleted: DeletedSnapshot = {
+          snapshot,
+          deleted_at: new Date(),
+        }
+
+        set((s) => ({
+          snapshots: s.snapshots.filter((snap) => snap.id !== snapshotId),
+          lastDeletedSnapshot: deleted,
+        }))
+
+        return { success: true, message: `已删除快照「${snapshot.name}」` }
+      },
+
+      undoDeleteSnapshot: () => {
+        const { lastDeletedSnapshot } = get()
+
+        if (!lastDeletedSnapshot) {
+          return { success: false, message: '没有可撤销的删除操作' }
+        }
+
+        const { snapshot } = lastDeletedSnapshot
+
+        set((s) => ({
+          snapshots: [snapshot, ...s.snapshots].sort(
+            (a, b) => b.created_at.getTime() - a.created_at.getTime()
+          ),
+          lastDeletedSnapshot: null,
+        }))
+
+        return { success: true, snapshot, message: `已恢复快照「${snapshot.name}」` }
+      },
+
+      canUndoDeleteSnapshot: () => {
+        return get().lastDeletedSnapshot !== null
+      },
+
+      renameSnapshot: (snapshotId, newName) => {
+        const trimmedName = newName.trim()
+        if (!trimmedName) {
+          return { success: false, error: '快照名称不能为空' }
+        }
+
+        const { snapshots } = get()
+        const existing = snapshots.find((s) => s.id !== snapshotId && s.name === trimmedName)
+        if (existing) {
+          return { success: false, error: '已存在同名快照，请使用其他名称' }
+        }
+
+        set((s) => ({
+          snapshots: s.snapshots.map((snap) =>
+            snap.id === snapshotId ? { ...snap, name: trimmedName } : snap
+          ),
+        }))
+
+        return { success: true }
       },
 
       resetAll: () => {
@@ -533,6 +680,8 @@ export const useAppStore = create<AppState>()(
           rules: { ...DEFAULT_RULES },
           uiState: { selectedEventId: null, drawerOpen: false, lastAnalysisAt: null },
           lastBatchOperation: null,
+          snapshots: [],
+          lastDeletedSnapshot: null,
         })
       },
     }),
@@ -548,6 +697,8 @@ export const useAppStore = create<AppState>()(
         importRecords: state.importRecords,
         rules: state.rules,
         lastBatchOperation: state.lastBatchOperation,
+        snapshots: state.snapshots,
+        lastDeletedSnapshot: state.lastDeletedSnapshot,
       }),
     }
   )

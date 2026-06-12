@@ -155,3 +155,91 @@ export interface BatchOperation {
   targets: BatchActionTarget[]
   executedAt: Date
 }
+
+export interface SnapshotBatchSummary {
+  total_count: number
+  valid_count: number
+  file_count: number
+}
+
+export interface SnapshotTypeStats {
+  timeout: number
+  low_score: number
+  repeat_complaint: number
+  high_refund: number
+}
+
+export interface SnapshotStatusStats {
+  pending: number
+  reviewing: number
+  closed: number
+}
+
+export interface SnapshotEventBrief {
+  id: string
+  customer_id: string
+  title: string
+  types: QualityEventType[]
+  status: EventStatus
+  evidence_count: number
+  total_refund: number
+}
+
+export interface AnalysisSnapshot {
+  id: string
+  name: string
+  description?: string
+  rules: QualityRule
+  batch_summary: SnapshotBatchSummary
+  event_count: number
+  by_type: SnapshotTypeStats
+  by_status: SnapshotStatusStats
+  events: SnapshotEventBrief[]
+  created_at: Date
+}
+
+export interface DeletedSnapshot {
+  snapshot: AnalysisSnapshot
+  deleted_at: Date
+}
+
+export type SnapshotDiffChangeType = 'added' | 'removed' | 'status_changed' | 'type_changed' | 'unchanged'
+
+export interface SnapshotEventDiff {
+  id: string
+  change_type: SnapshotDiffChangeType
+  customer_id: string
+  title: string
+  old_status?: EventStatus
+  new_status?: EventStatus
+  old_types?: QualityEventType[]
+  new_types?: QualityEventType[]
+  old_evidence_count?: number
+  new_evidence_count?: number
+  old_total_refund?: number
+  new_total_refund?: number
+}
+
+export interface SnapshotRuleDiff {
+  field: keyof QualityRule
+  old_value: number
+  new_value: number
+  change_direction: 'increased' | 'decreased'
+  impact_note: string
+}
+
+export interface SnapshotDiffResult {
+  old_snapshot_id: string
+  new_snapshot_id: string
+  old_snapshot_name: string
+  new_snapshot_name: string
+  total_added: number
+  total_removed: number
+  total_status_changed: number
+  total_type_changed: number
+  total_unchanged: number
+  event_diffs: SnapshotEventDiff[]
+  rule_diffs: SnapshotRuleDiff[]
+  type_stats_diff: Record<QualityEventType, number>
+  status_stats_diff: Record<EventStatus, number>
+}

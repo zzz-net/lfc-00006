@@ -1,6 +1,6 @@
 import { ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Upload, Settings, ClipboardCheck, Download, BarChart3 } from 'lucide-react'
+import { LayoutDashboard, Upload, Settings, ClipboardCheck, Download, BarChart3, Camera } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface AppLayoutProps {
@@ -13,6 +13,7 @@ const navItems = [
   { path: '/import', label: '数据导入', icon: Upload },
   { path: '/rules', label: '规则配置', icon: Settings },
   { path: '/review', label: '事件复核', icon: ClipboardCheck },
+  { path: '/snapshots', label: '快照对比', icon: Camera },
   { path: '/export', label: '数据导出', icon: Download },
 ]
 
