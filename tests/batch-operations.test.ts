@@ -239,7 +239,7 @@ function simulateExecuteBatchAction(
       continue
     }
 
-    if (event.status === 'closed' && action !== 'reopen') {
+    if (event.status === 'closed') {
       skipped.push({
         id,
         reason: 'already_closed',
@@ -273,12 +273,25 @@ function simulateExecuteBatchAction(
 
   const updatedEvents = events.map((e) => {
     if (!targetIdSet.has(e.id)) return e
+    let newReviewedAt: Date | null = e.reviewed_at
+    let newClosedAt: Date | null = e.closed_at
+
+    if (targetStatus === 'closed') {
+      newReviewedAt = now
+      newClosedAt = now
+    } else if (targetStatus === 'reviewing') {
+      newReviewedAt = now
+      newClosedAt = null
+    } else if (targetStatus === 'pending') {
+      newClosedAt = null
+    }
+
     return {
       ...e,
       status: targetStatus,
       review_note: hasNote ? note.trim() : e.review_note,
-      reviewed_at: targetStatus === 'reviewing' || targetStatus === 'closed' ? now : e.reviewed_at,
-      closed_at: targetStatus === 'closed' ? now : e.closed_at,
+      reviewed_at: newReviewedAt,
+      closed_at: newClosedAt,
     }
   })
 
@@ -526,6 +539,146 @@ async function runTests() {
       assert.equal(event!.review_note, '需要重新复核', `事件 ${id} 备注应更新`)
       assert.equal(event!.closed_at, null, `事件 ${id} closed_at 应为 null`)
     }
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 5b: 回归测试 - closed 事件执行 reopen 应被跳过 ----
+  console.log('Test 5b: 回归测试 - closed 事件执行 reopen 后仍保持 closed，successCount=0, skipCount=1')
+  try {
+    const events = createTestEvents()
+    const closedEvent = events.find((e) => e.id === 'evt_005')!
+    const originalStatus = closedEvent.status
+    const originalNote = closedEvent.review_note
+    const originalClosedAt = closedEvent.closed_at?.getTime()
+    const originalReviewedAt = closedEvent.reviewed_at?.getTime()
+
+    assert.equal(originalStatus, 'closed', '测试前置：事件应为 closed 状态')
+    assert.ok(originalNote.length > 0, '测试前置：事件应有原始备注')
+    assert.ok(originalClosedAt, '测试前置：事件应有 closed_at')
+
+    const ids = ['evt_005']
+    const expectedStatuses: Record<string, EventStatus> = {
+      evt_005: 'closed',
+    }
+
+    const { updatedEvents, result } = simulateExecuteBatchAction(
+      events,
+      ids,
+      'reopen',
+      '尝试退回已关闭事件',
+      expectedStatuses
+    )
+
+    assert.equal(result.totalRequested, 1, '应请求处理 1 个事件')
+    assert.equal(result.successCount, 0, 'successCount 应为 0 - closed 事件不应被成功处理')
+    assert.equal(result.skipCount, 1, 'skipCount 应为 1 - closed 事件必须被跳过')
+    assert.equal(result.skipped.length, 1, '应有 1 条跳过记录')
+    assert.equal(result.skipped[0].id, 'evt_005', '跳过的应为 evt_005')
+    assert.equal(result.skipped[0].reason, 'already_closed', '跳过原因应为 already_closed')
+    assert.equal(result.skipped[0].actualStatus, 'closed', '实际状态应为 closed')
+
+    const afterEvent = updatedEvents.find((e) => e.id === 'evt_005')!
+    assert.equal(afterEvent.status, 'closed', '事件状态应保持 closed 不变')
+    assert.equal(afterEvent.review_note, originalNote, '事件备注应保持不变')
+    assert.equal(afterEvent.closed_at?.getTime(), originalClosedAt, '事件 closed_at 应保持不变')
+    assert.equal(afterEvent.reviewed_at?.getTime(), originalReviewedAt, '事件 reviewed_at 应保持不变')
+    assert.equal(afterEvent.evidence_count, closedEvent.evidence_count, '证据数应保持不变')
+    assert.equal(afterEvent.total_refund, closedEvent.total_refund, '退款额应保持不变')
+    assert.equal(afterEvent.customer_id, closedEvent.customer_id, '客户ID应保持不变')
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 5c: 回归测试 - 混合 closed+reviewing 执行 reopen，closed 跳过 reviewing 成功 ----
+  console.log('Test 5c: 混合场景 - closed+reviewing 混合执行 reopen，closed 跳过，reviewing 成功且 closed_at 清空')
+  try {
+    const events = createTestEvents()
+    const mixedIds = ['evt_003', 'evt_005']
+
+    const origEvt003 = events.find((e) => e.id === 'evt_003')!
+    const origEvt005 = events.find((e) => e.id === 'evt_005')!
+
+    const expectedStatuses: Record<string, EventStatus> = {
+      evt_003: 'reviewing',
+      evt_005: 'closed',
+    }
+
+    const { updatedEvents, result } = simulateExecuteBatchAction(
+      events,
+      mixedIds,
+      'reopen',
+      '批量退回待处理',
+      expectedStatuses
+    )
+
+    assert.equal(result.totalRequested, 2, '应请求处理 2 个事件')
+    assert.equal(result.successCount, 1, '应成功处理 1 个事件（reviewing）')
+    assert.equal(result.skipCount, 1, '应跳过 1 个事件（closed）')
+    assert.equal(result.skipped[0].id, 'evt_005', '跳过的应为 closed 的 evt_005')
+    assert.equal(result.skipped[0].reason, 'already_closed', '跳过原因应为 already_closed')
+
+    const afterEvt003 = updatedEvents.find((e) => e.id === 'evt_003')!
+    assert.equal(afterEvt003.status, 'pending', 'evt_003 应从 reviewing → pending')
+    assert.equal(afterEvt003.review_note, '批量退回待处理', 'evt_003 备注应更新')
+    assert.equal(afterEvt003.closed_at, null, 'evt_003 closed_at 应被清空（不能残留）')
+
+    const afterEvt005 = updatedEvents.find((e) => e.id === 'evt_005')!
+    assert.equal(afterEvt005.status, 'closed', 'evt_005 状态应保持 closed')
+    assert.equal(afterEvt005.review_note, origEvt005.review_note, 'evt_005 备注应保持不变')
+    assert.equal(afterEvt005.closed_at?.getTime(), origEvt005.closed_at?.getTime(), 'evt_005 closed_at 应保持不变')
+    assert.equal(afterEvt005.reviewed_at?.getTime(), origEvt005.reviewed_at?.getTime(), 'evt_005 reviewed_at 应保持不变')
+
+    assert.deepEqual(result.targets.map((t) => t.id), ['evt_003'], '操作目标应仅包含 evt_003')
+    assert.equal(result.targets[0].originalStatus, 'reviewing', '撤销记录中原始状态应为 reviewing')
+    assert.equal(result.targets[0].originalNote, origEvt003.review_note, '撤销记录中原始备注应保存')
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 5d: 三种跳过原因同时存在的综合场景 ----
+  console.log('Test 5d: 综合场景 - closed+不存在+状态变化 三种跳过原因同时出现')
+  try {
+    const events = createTestEvents()
+    const ids = ['evt_005', 'evt_999', 'evt_003']
+
+    const expectedStatuses: Record<string, EventStatus> = {
+      evt_005: 'closed',
+      evt_999: 'pending',
+      evt_003: 'pending',
+    }
+
+    const { result } = simulateExecuteBatchAction(events, ids, 'confirm', '', expectedStatuses)
+
+    assert.equal(result.totalRequested, 3, '应请求处理 3 个事件')
+    assert.equal(result.successCount, 0, '3 个都应跳过，successCount 为 0')
+    assert.equal(result.skipCount, 3, 'skipCount 应为 3')
+
+    const reasons = result.skipped.map((s) => s.reason).sort()
+    assert.deepEqual(
+      reasons,
+      ['already_closed', 'not_found', 'status_changed'].sort(),
+      '三种跳过原因都应出现：already_closed, not_found, status_changed'
+    )
+
+    const byId = Object.fromEntries(result.skipped.map((s) => [s.id, s]))
+    assert.equal(byId['evt_005'].reason, 'already_closed')
+    assert.equal(byId['evt_999'].reason, 'not_found')
+    assert.equal(byId['evt_003'].reason, 'status_changed')
+    assert.equal(byId['evt_003'].expectedStatus, 'pending')
+    assert.equal(byId['evt_003'].actualStatus, 'reviewing')
 
     console.log('  ✅ 通过')
     passed++

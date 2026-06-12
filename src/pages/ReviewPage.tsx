@@ -164,12 +164,14 @@ export default function ReviewPage() {
     }
   }
 
-  const getSkippedMessage = (skip: BatchActionSkipReason): string => {
+  const getSkippedMessage = (skip: BatchActionSkipReason, action?: BatchActionType): string => {
+    const act = action || batchConfirm.action || batchResult?.action
+    const actionLabel = act === 'confirm' ? '确认' : act === 'ignore' ? '忽略' : '退回待处理'
     switch (skip.reason) {
       case 'not_found':
         return `事件 ${skip.id.slice(-8)} 不存在`
       case 'already_closed':
-        return `事件 ${skip.id.slice(-8)} 已关闭，无法${batchConfirm.action === 'confirm' ? '确认' : batchConfirm.action === 'ignore' ? '忽略' : '操作'}`
+        return `事件 ${skip.id.slice(-8)} 已关闭归档，无法${actionLabel}`
       case 'status_changed':
         return `事件 ${skip.id.slice(-8)} 状态已变更：${skip.expectedStatus ? statusLabelMap[skip.expectedStatus] : '未知'} → ${skip.actualStatus ? statusLabelMap[skip.actualStatus] : '未知'}`
       default:
@@ -180,7 +182,7 @@ export default function ReviewPage() {
   const canPerformAction = (action: BatchActionType): boolean => {
     if (selectedIds.size === 0) return false
     if (action === 'reopen') {
-      return selectedEvents.some((e) => e.status !== 'pending')
+      return selectedEvents.some((e) => e.status === 'reviewing')
     }
     return selectedEvents.some((e) => e.status !== 'closed')
   }
@@ -333,19 +335,25 @@ export default function ReviewPage() {
                   <p className="text-base font-bold text-emerald-700">{statusDistribution.closed}</p>
                 </div>
               </div>
-              {batchConfirm.action !== 'reopen' && statusDistribution.closed > 0 && (
+              {statusDistribution.closed > 0 && (
                 <div className="mt-3 flex items-start gap-2 text-[11px] text-amber-700 bg-amber-50 rounded-lg p-2.5">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-medium">注意：{statusDistribution.closed} 个已关闭事件将被跳过</p>
-                    <p className="text-amber-600 mt-0.5">已关闭事件无法通过确认/忽略操作修改状态</p>
+                    <p className="font-medium">
+                      注意：{statusDistribution.closed} 个已关闭归档事件将被跳过
+                    </p>
+                    <p className="text-amber-600 mt-0.5">
+                      已归档事件无法通过{batchConfirm.action === 'confirm' ? '确认' : batchConfirm.action === 'ignore' ? '忽略' : '退回待处理'}修改状态
+                    </p>
                   </div>
                 </div>
               )}
-              {batchConfirm.action === 'reopen' && statusDistribution.pending === selectedIds.size && (
+              {batchConfirm.action === 'reopen' && statusDistribution.pending > 0 && statusDistribution.reviewing === 0 && (
                 <div className="mt-3 flex items-start gap-2 text-[11px] text-amber-700 bg-amber-50 rounded-lg p-2.5">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <p className="font-medium">选中事件全部为待复核状态，无需退回</p>
+                  <p className="font-medium">
+                    选中事件中没有复核中状态的事件，{statusDistribution.closed > 0 ? '已关闭的' : '待复核的'}事件无需退回
+                  </p>
                 </div>
               )}
             </div>

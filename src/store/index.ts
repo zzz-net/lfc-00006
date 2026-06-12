@@ -333,7 +333,7 @@ export const useAppStore = create<AppState>()(
             continue
           }
 
-          if (event.status === 'closed' && action !== 'reopen') {
+          if (event.status === 'closed') {
             skipped.push({
               id,
               reason: 'already_closed',
@@ -368,12 +368,25 @@ export const useAppStore = create<AppState>()(
           events: s.events.map((e) => {
             if (!targetIdSet.has(e.id)) return e
             const hasNote = note && note.trim().length > 0
+            let newReviewedAt: Date | null = e.reviewed_at
+            let newClosedAt: Date | null = e.closed_at
+
+            if (targetStatus === 'closed') {
+              newReviewedAt = now
+              newClosedAt = now
+            } else if (targetStatus === 'reviewing') {
+              newReviewedAt = now
+              newClosedAt = null
+            } else if (targetStatus === 'pending') {
+              newClosedAt = null
+            }
+
             return {
               ...e,
               status: targetStatus,
               review_note: hasNote ? note.trim() : e.review_note,
-              reviewed_at: targetStatus === 'reviewing' || targetStatus === 'closed' ? now : e.reviewed_at,
-              closed_at: targetStatus === 'closed' ? now : e.closed_at,
+              reviewed_at: newReviewedAt,
+              closed_at: newClosedAt,
             }
           }),
           lastBatchOperation: {
