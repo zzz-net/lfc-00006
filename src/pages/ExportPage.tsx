@@ -16,6 +16,7 @@ import {
   Shield,
   CheckCircle2,
   Camera,
+  Bookmark,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { EventStatus, QualityEventType } from '@/types'
@@ -41,6 +42,8 @@ export default function ExportPage() {
   const exportEvidences = useAppStore((s) => s.exportEvidences)
   const exportFullBackup = useAppStore((s) => s.exportFullBackup)
   const restoreFromBackup = useAppStore((s) => s.restoreFromBackup)
+  const activeScheme = useAppStore((s) => s.getActiveScheme())
+  const isSchemeDirty = useAppStore((s) => s.isSchemeDirty())
   const toast = useToast()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -52,6 +55,8 @@ export default function ExportPage() {
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
   const [pendingRestoreFile, setPendingRestoreFile] = useState<File | null>(null)
   const [restorePreview, setRestorePreview] = useState<{ eventCount: number; snapshotCount: number } | null>(null)
+  const [showDirtyExportConfirm, setShowDirtyExportConfirm] = useState(false)
+  const [pendingExportAction, setPendingExportAction] = useState<'events' | 'backup' | null>(null)
 
   const toggleStatus = (s: EventStatus) => {
     setSelectedStatuses((prev) => {
@@ -90,6 +95,15 @@ export default function ExportPage() {
       toast.warning('当前筛选条件下没有可导出的事件')
       return
     }
+    if (isSchemeDirty) {
+      setPendingExportAction('events')
+      setShowDirtyExportConfirm(true)
+      return
+    }
+    doExportEvents()
+  }
+
+  const doExportEvents = () => {
     exportEvents(getFilter(), format)
     toast.success(`已导出 ${preview.eventCount} 条事件（${format.toUpperCase()}格式）`)
   }
@@ -105,8 +119,24 @@ export default function ExportPage() {
   }
 
   const handleExportBackup = () => {
+    if (isSchemeDirty) {
+      setPendingExportAction('backup')
+      setShowDirtyExportConfirm(true)
+      return
+    }
+    doExportBackup()
+  }
+
+  const doExportBackup = () => {
     exportFullBackup()
     toast.success(`全量备份已导出（共 ${events.length} 个事件）`)
+  }
+
+  const confirmDirtyExport = () => {
+    if (pendingExportAction === 'events') doExportEvents()
+    else if (pendingExportAction === 'backup') doExportBackup()
+    setShowDirtyExportConfirm(false)
+    setPendingExportAction(null)
   }
 
   const handleRestoreClick = () => fileInputRef.current?.click()
@@ -326,6 +356,18 @@ export default function ExportPage() {
                 )}
               </div>
             </div>
+            {activeScheme && (
+              <div className="mt-3 pt-3 border-t border-white/10 flex items-center gap-3 text-xs">
+                <Bookmark className="w-3.5 h-3.5 text-indigo-300" />
+                <span className="text-slate-300">当前方案：<span className="font-medium text-white">{activeScheme.name}</span></span>
+                {isSchemeDirty && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 text-[10px] font-medium">
+                    <AlertTriangle className="w-3 h-3" />
+                    配置已偏离方案
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="px-6 pb-6">
@@ -472,6 +514,23 @@ export default function ExportPage() {
         variant="danger"
         onConfirm={handleConfirmRestore}
         onCancel={handleCancelRestore}
+      />
+
+      <ConfirmModal
+        open={showDirtyExportConfirm}
+        title="规则配置已偏离方案"
+        description={
+          <div className="text-sm text-slate-600 space-y-2">
+            <p>当前规则配置与方案「{activeScheme?.name}」不一致。</p>
+            <p>导出文件中将记录当前实际使用的规则，而非方案中的规则。</p>
+            <p className="text-amber-600 font-medium">确定要继续导出吗？</p>
+          </div>
+        }
+        confirmText="继续导出"
+        cancelText="取消"
+        variant="danger"
+        onConfirm={confirmDirtyExport}
+        onCancel={() => { setShowDirtyExportConfirm(false); setPendingExportAction(null) }}
       />
     </AppLayout>
   )

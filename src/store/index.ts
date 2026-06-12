@@ -17,6 +17,7 @@ import type {
   BatchOperation,
   AnalysisSnapshot,
   DeletedSnapshot,
+  RuleScheme,
 } from '@/types'
 import { uid } from '@/utils'
 import { runAnalysis } from '@/services/analyzeService'
@@ -33,6 +34,27 @@ const DEFAULT_RULES: QualityRule = {
   repeat_days: 7,
   repeat_count: 3,
   high_refund_amount: 500,
+}
+
+const DEFAULT_SCHEME_ID = 'scheme_default'
+
+function createDefaultScheme(): RuleScheme {
+  return {
+    id: DEFAULT_SCHEME_ID,
+    name: '默认方案',
+    rules: { ...DEFAULT_RULES },
+    is_default: true,
+    created_at: new Date(),
+    updated_at: new Date(),
+  }
+}
+
+function rulesEqual(a: QualityRule, b: QualityRule): boolean {
+  return a.timeout_hours === b.timeout_hours &&
+    a.min_score === b.min_score &&
+    a.repeat_days === b.repeat_days &&
+    a.repeat_count === b.repeat_count &&
+    a.high_refund_amount === b.high_refund_amount
 }
 
 export interface UIState {
@@ -53,6 +75,8 @@ interface AppState {
   lastBatchOperation: BatchOperation | null
   snapshots: AnalysisSnapshot[]
   lastDeletedSnapshot: DeletedSnapshot | null
+  schemes: RuleScheme[]
+  activeSchemeId: string | null
 
   setSelectedEvent: (id: string | null) => void
   setDrawerOpen: (open: boolean) => void
@@ -66,6 +90,14 @@ interface AppState {
   runAnalysis: () => void
 
   saveRules: (rules: QualityRule) => void
+
+  saveScheme: (name: string) => { success: boolean; scheme?: RuleScheme; error?: string }
+  updateScheme: (schemeId: string, rules: QualityRule) => { success: boolean; error?: string }
+  loadScheme: (schemeId: string) => { success: boolean; error?: string }
+  deleteScheme: (schemeId: string) => { success: boolean; error?: string }
+  renameScheme: (schemeId: string, newName: string) => { success: boolean; error?: string }
+  getActiveScheme: () => RuleScheme | null
+  isSchemeDirty: () => boolean
 
   updateEventStatus: (eventId: string, status: EventStatus, note?: string) => void
   closeEvent: (eventId: string, note?: string) => void
@@ -165,6 +197,8 @@ export const useAppStore = create<AppState>()(
       lastBatchOperation: null,
       snapshots: [],
       lastDeletedSnapshot: null,
+      schemes: [createDefaultScheme()],
+      activeSchemeId: DEFAULT_SCHEME_ID,
 
       setSelectedEvent: (id) => set((s) => ({ uiState: { ...s.uiState, selectedEventId: id, drawerOpen: id !== null } })),
       setDrawerOpen: (open) => set((s) => ({ uiState: { ...s.uiState, drawerOpen: open } })),
@@ -276,6 +310,114 @@ export const useAppStore = create<AppState>()(
       saveRules: (rules) => {
         set({ rules: { ...rules } })
         get().runAnalysis()
+      },
+
+      saveScheme: (name) => {
+        const trimmed = name.trim()
+        if (!trimmed) {
+          return { success: false, error: '方案名称不能为空' }
+        }
+        const { schemes, rules } = get()
+        if (schemes.some((s) => s.name === trimmed)) {
+          return { success: false, error: '已存在同名方案，请使用其他名称' }
+        }
+        const now = new Date()
+        const newScheme: RuleScheme = {
+          id: uid('scheme'),
+          name: trimmed,
+          rules: { ...rules },
+          is_default: false,
+          created_at: now,
+          updated_at: now,
+        }
+        set((s) => ({
+          schemes: [...s.schemes, newScheme],
+          activeSchemeId: newScheme.id,
+        }))
+        return { success: true, scheme: newScheme }
+      },
+
+      updateScheme: (schemeId, rules) => {
+        const { schemes } = get()
+        const scheme = schemes.find((s) => s.id === schemeId)
+        if (!scheme) {
+          return { success: false, error: '方案不存在' }
+        }
+        const now = new Date()
+        set((s) => ({
+          schemes: s.schemes.map((sc) =>
+            sc.id === schemeId ? { ...sc, rules: { ...rules }, updated_at: now } : sc
+          ),
+          rules: { ...rules },
+        }))
+        get().runAnalysis()
+        return { success: true }
+      },
+
+      loadScheme: (schemeId) => {
+        const { schemes } = get()
+        const scheme = schemes.find((s) => s.id === schemeId)
+        if (!scheme) {
+          return { success: false, error: '方案不存在' }
+        }
+        set({
+          rules: { ...scheme.rules },
+          activeSchemeId: schemeId,
+        })
+        get().runAnalysis()
+        return { success: true }
+      },
+
+      deleteScheme: (schemeId) => {
+        const { schemes, activeSchemeId } = get()
+        const scheme = schemes.find((s) => s.id === schemeId)
+        if (!scheme) {
+          return { success: false, error: '方案不存在' }
+        }
+        if (scheme.is_default) {
+          return { success: false, error: '默认方案不能被删除' }
+        }
+        const newSchemes = schemes.filter((s) => s.id !== schemeId)
+        const newActiveId = activeSchemeId === schemeId ? DEFAULT_SCHEME_ID : activeSchemeId
+        const newActiveScheme = newSchemes.find((s) => s.id === newActiveId)
+        set((s) => ({
+          schemes: newSchemes,
+          activeSchemeId: newActiveId,
+          rules: activeSchemeId === schemeId && newActiveScheme ? { ...newActiveScheme.rules } : s.rules,
+        }))
+        if (activeSchemeId === schemeId) {
+          get().runAnalysis()
+        }
+        return { success: true }
+      },
+
+      renameScheme: (schemeId, newName) => {
+        const trimmed = newName.trim()
+        if (!trimmed) {
+          return { success: false, error: '方案名称不能为空' }
+        }
+        const { schemes } = get()
+        if (schemes.some((s) => s.id !== schemeId && s.name === trimmed)) {
+          return { success: false, error: '已存在同名方案，请使用其他名称' }
+        }
+        set((s) => ({
+          schemes: s.schemes.map((sc) =>
+            sc.id === schemeId ? { ...sc, name: trimmed, updated_at: new Date() } : sc
+          ),
+        }))
+        return { success: true }
+      },
+
+      getActiveScheme: () => {
+        const { schemes, activeSchemeId } = get()
+        return schemes.find((s) => s.id === activeSchemeId) || null
+      },
+
+      isSchemeDirty: () => {
+        const { rules, schemes, activeSchemeId } = get()
+        const active = schemes.find((s) => s.id === activeSchemeId)
+        if (!active) return true
+        return !rulesEqual(rules, active.rules)
       },
 
       updateEventStatus: (eventId, status, note) => {
@@ -465,13 +607,24 @@ export const useAppStore = create<AppState>()(
 
       exportEvents: (filter, format) => {
         const { events, evidences } = get()
+        const activeScheme = get().getActiveScheme()
+        const schemeInfo = activeScheme ? {
+          scheme_name: activeScheme.name,
+          scheme_id: activeScheme.id,
+          scheme_created_at: activeScheme.created_at.toISOString(),
+          timeout_hours: activeScheme.rules.timeout_hours,
+          min_score: activeScheme.rules.min_score,
+          repeat_days: activeScheme.rules.repeat_days,
+          repeat_count: activeScheme.rules.repeat_count,
+          high_refund_amount: activeScheme.rules.high_refund_amount,
+        } : undefined
         const { filteredEvents, filteredEvidences } = buildExportFilteredEvents(events, evidences, filter)
         const ts = dayjs().format('YYYYMMDD_HHmmss')
         if (format === 'csv') {
-          const csv = eventsToCSV(filteredEvents)
+          const csv = eventsToCSV(filteredEvents, schemeInfo)
           downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `events_${ts}.csv`)
         } else {
-          const json = eventsToJSON(filteredEvents, filteredEvidences, filter.includeEvidences)
+          const json = eventsToJSON(filteredEvents, filteredEvidences, filter.includeEvidences, schemeInfo)
           downloadBlob(new Blob([json], { type: 'application/json' }), `events_${ts}.json`)
         }
       },
@@ -518,6 +671,7 @@ export const useAppStore = create<AppState>()(
           snapshots: state.snapshots.map((snap) => ({
             ...snap,
             created_at: snap.created_at.toISOString(),
+            scheme_created_at: snap.scheme_created_at ? snap.scheme_created_at.toISOString() : null,
           })),
           lastDeletedSnapshot: state.lastDeletedSnapshot
             ? {
@@ -526,9 +680,16 @@ export const useAppStore = create<AppState>()(
                 snapshot: {
                   ...state.lastDeletedSnapshot.snapshot,
                   created_at: state.lastDeletedSnapshot.snapshot.created_at.toISOString(),
+                  scheme_created_at: state.lastDeletedSnapshot.snapshot.scheme_created_at ? state.lastDeletedSnapshot.snapshot.scheme_created_at.toISOString() : null,
                 },
               }
             : null,
+          schemes: state.schemes.map((sc) => ({
+            ...sc,
+            created_at: sc.created_at.toISOString(),
+            updated_at: sc.updated_at.toISOString(),
+          })),
+          activeSchemeId: state.activeSchemeId,
         })
         const ts = dayjs().format('YYYYMMDD_HHmmss')
         downloadBlob(new Blob([backup], { type: 'application/json' }), `full_backup_${ts}.json`)
@@ -551,6 +712,14 @@ export const useAppStore = create<AppState>()(
           const lastBatchOperation: BatchOperation | null = s.lastBatchOperation || null
           const snapshots: AnalysisSnapshot[] = s.snapshots || []
           const lastDeletedSnapshot: DeletedSnapshot | null = s.lastDeletedSnapshot || null
+          const restoredSchemes: RuleScheme[] = s.schemes || []
+          const restoredActiveSchemeId: string | null = s.activeSchemeId || null
+
+          const hasDefaultScheme = restoredSchemes.some((sc: RuleScheme) => sc.is_default)
+          const schemes = hasDefaultScheme ? restoredSchemes : [createDefaultScheme(), ...restoredSchemes]
+          const activeSchemeId = restoredActiveSchemeId && schemes.some((sc: RuleScheme) => sc.id === restoredActiveSchemeId)
+            ? restoredActiveSchemeId
+            : DEFAULT_SCHEME_ID
 
           set({
             tickets,
@@ -563,6 +732,8 @@ export const useAppStore = create<AppState>()(
             lastBatchOperation,
             snapshots,
             lastDeletedSnapshot,
+            schemes,
+            activeSchemeId,
           })
           return {
             eventCount: events.length,
@@ -581,11 +752,16 @@ export const useAppStore = create<AppState>()(
 
       saveAnalysisSnapshot: (name, description) => {
         const { events, rules, importRecords, snapshots } = get()
+        const activeScheme = get().getActiveScheme()
 
         const existingNames = snapshots.map((s) => s.name)
         const snapshotName = generateUniqueSnapshotName(existingNames, name)
 
-        const newSnapshot = createSnapshot(snapshotName, description, events, rules, importRecords)
+        const newSnapshot = createSnapshot(snapshotName, description, events, rules, importRecords, activeScheme ? {
+          scheme_id: activeScheme.id,
+          scheme_name: activeScheme.name,
+          scheme_created_at: activeScheme.created_at,
+        } : undefined)
 
         if (isSnapshotEmpty(newSnapshot)) {
           return { success: false, error: '当前没有数据和事件，无法保存空快照', isEmpty: true }
@@ -682,6 +858,8 @@ export const useAppStore = create<AppState>()(
           lastBatchOperation: null,
           snapshots: [],
           lastDeletedSnapshot: null,
+          schemes: [createDefaultScheme()],
+          activeSchemeId: DEFAULT_SCHEME_ID,
         })
       },
     }),
@@ -699,6 +877,8 @@ export const useAppStore = create<AppState>()(
         lastBatchOperation: state.lastBatchOperation,
         snapshots: state.snapshots,
         lastDeletedSnapshot: state.lastDeletedSnapshot,
+        schemes: state.schemes,
+        activeSchemeId: state.activeSchemeId,
       }),
     }
   )

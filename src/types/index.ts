@@ -185,11 +185,23 @@ export interface SnapshotEventBrief {
   total_refund: number
 }
 
+export interface RuleScheme {
+  id: string
+  name: string
+  rules: QualityRule
+  is_default: boolean
+  created_at: Date
+  updated_at: Date
+}
+
 export interface AnalysisSnapshot {
   id: string
   name: string
   description?: string
   rules: QualityRule
+  scheme_id: string | null
+  scheme_name: string | null
+  scheme_created_at: Date | null
   batch_summary: SnapshotBatchSummary
   event_count: number
   by_type: SnapshotTypeStats

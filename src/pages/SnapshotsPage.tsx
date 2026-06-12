@@ -23,6 +23,7 @@ import {
   Edit3,
   Check,
   ArrowLeftRight,
+  Bookmark,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import dayjs from 'dayjs'
@@ -54,6 +55,8 @@ export default function SnapshotsPage() {
   const undoDeleteSnapshot = useAppStore((s) => s.undoDeleteSnapshot)
   const canUndoDeleteSnapshot = useAppStore((s) => s.canUndoDeleteSnapshot)
   const renameSnapshot = useAppStore((s) => s.renameSnapshot)
+  const activeScheme = useAppStore((s) => s.getActiveScheme())
+  const isSchemeDirty = useAppStore((s) => s.isSchemeDirty())
   const toast = useToast()
 
   const [snapshotName, setSnapshotName] = useState('')
@@ -299,6 +302,21 @@ export default function SnapshotsPage() {
         description={
           <div className="space-y-3">
             <p className="text-sm text-slate-600">为当前分析状态创建一个快照，便于后续对比分析。</p>
+            {isSchemeDirty && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-700 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                当前规则配置已偏离方案，快照将记录当前实际规则（非方案规则）。
+              </div>
+            )}
+            {activeScheme && (
+              <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-2.5 text-xs text-indigo-700 flex items-center gap-2">
+                <Bookmark className="w-4 h-4 shrink-0" />
+                当前方案：{activeScheme.name}
+                {activeScheme.created_at && (
+                  <span className="text-indigo-500 ml-1">（创建于 {dayjs(activeScheme.created_at).format('YYYY-MM-DD HH:mm')}）</span>
+                )}
+              </div>
+            )}
             <div>
               <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
                 快照名称
@@ -455,6 +473,12 @@ function SnapshotCard({
                 <RefreshCw className="w-3.5 h-3.5" />
                 {snapshot.batch_summary.file_count} 个文件
               </span>
+              {snapshot.scheme_name && (
+                <span className="inline-flex items-center gap-1">
+                  <Bookmark className="w-3.5 h-3.5" />
+                  {snapshot.scheme_name}
+                </span>
+              )}
             </div>
           </div>
           {!compareMode && (
@@ -508,6 +532,23 @@ function SnapshotCard({
                 <div>数据文件：<span className="font-medium text-slate-700">{snapshot.batch_summary.file_count}个</span></div>
                 <div>有效数据：<span className="font-medium text-slate-700">{snapshot.batch_summary.valid_count}条</span></div>
               </div>
+              {snapshot.scheme_name && (
+                <div className="mt-2 pt-2 border-t border-slate-200">
+                  <p className="text-xs font-semibold text-slate-600 mb-1">规则方案</p>
+                  <div className="flex items-center gap-3 text-xs text-slate-500">
+                    <span className="inline-flex items-center gap-1">
+                      <Bookmark className="w-3 h-3 text-indigo-500" />
+                      <span className="font-medium text-indigo-700">{snapshot.scheme_name}</span>
+                    </span>
+                    {snapshot.scheme_created_at && (
+                      <>
+                        <span className="w-px h-3 bg-slate-200" />
+                        <span>方案创建：<span className="font-mono text-slate-600">{dayjs(snapshot.scheme_created_at).format('YYYY-MM-DD HH:mm')}</span></span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

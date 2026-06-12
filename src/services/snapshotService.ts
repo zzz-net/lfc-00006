@@ -89,13 +89,17 @@ export function createSnapshot(
   description: string | undefined,
   events: QualityEvent[],
   rules: QualityRule,
-  importRecords: ImportRecord[]
+  importRecords: ImportRecord[],
+  schemeInfo?: { scheme_id: string; scheme_name: string; scheme_created_at: Date }
 ): AnalysisSnapshot {
   return {
     id: uid(),
     name: name.trim(),
     description: description?.trim() || undefined,
     rules: { ...rules },
+    scheme_id: schemeInfo?.scheme_id || null,
+    scheme_name: schemeInfo?.scheme_name || null,
+    scheme_created_at: schemeInfo?.scheme_created_at || null,
     batch_summary: buildBatchSummary(importRecords),
     event_count: events.length,
     by_type: buildTypeStats(events),
