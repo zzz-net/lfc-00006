@@ -1,7 +1,9 @@
 import { ImportRecord } from '@/types'
 import { useAppStore } from '@/store'
-import { FileText, Star, Banknote, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
+import { FileText, Star, Banknote, CheckCircle2, AlertTriangle, XCircle, Download } from 'lucide-react'
 import { cn, formatDateCN } from '@/lib/utils'
+import { downloadBlob } from '@/services/exportService'
+import { useToast } from '@/components/ToastProvider'
 
 const typeMeta: Record<string, { label: string; icon: typeof FileText; className: string; bg: string }> = {
   ticket: { label: '工单', icon: FileText, className: 'text-blue-700', bg: 'bg-blue-50 border-blue-200' },
@@ -11,7 +13,18 @@ const typeMeta: Record<string, { label: string; icon: typeof FileText; className
 
 export default function ImportRecordList() {
   const records = useAppStore((s) => s.importRecords)
+  const toast = useToast()
   const sorted = [...records].sort((a, b) => b.imported_at.getTime() - a.imported_at.getTime())
+
+  const handleDownload = (record: ImportRecord) => {
+    if (!record.raw_content) {
+      toast.error('该记录无原始文件内容')
+      return
+    }
+    const mime = record.file_type === 'refund' ? 'application/json' : 'text/csv;charset=utf-8'
+    downloadBlob(new Blob([record.raw_content], { type: mime }), record.file_name)
+    toast.success(`${record.file_name} 已下载`)
+  }
 
   if (sorted.length === 0) {
     return (
@@ -71,6 +84,17 @@ export default function ImportRecordList() {
                         部分失败
                       </span>
                     )}
+                    <button
+                      onClick={() => handleDownload(r)}
+                      title="下载原始文件"
+                      className={cn(
+                        'w-7 h-7 rounded-lg flex items-center justify-center transition-all',
+                        'bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700',
+                        meta.bg.replace('bg-', 'hover:bg-').replace('-50', '-100')
+                      )}
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 

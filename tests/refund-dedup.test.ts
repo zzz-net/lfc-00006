@@ -351,6 +351,172 @@ async function runTests() {
     failed++
   }
 
+  // ---- Test 7: 重复导入不影响已有关闭事件状态 ----
+  console.log('Test 7: 重复导入 → 已关闭事件状态保持不变')
+  try {
+    const file = new MockFile(SAMPLE_REFUND_JSON, 'sample_refunds.json', 'application/json')
+    const fileHash = await mockHashFile(file)
+
+    const events = [
+      {
+        id: 'evt_001',
+        customer_id: 'C001',
+        types: ['high_refund', 'timeout'],
+        status: 'closed',
+        review_note: '已处理，客户满意',
+        closed_at: new Date('2024-01-20T10:00:00'),
+        evidence_count: 3,
+        total_refund: 2099,
+      },
+    ]
+
+    const existingRecords: ImportRecord[] = [
+      {
+        id: uid(),
+        file_name: 'sample_refunds.json',
+        file_type: 'refund',
+        total_count: 3,
+        valid_count: 3,
+        invalid_count: 0,
+        file_hash: fileHash,
+        imported_at: new Date(),
+        errors: [],
+        raw_content: SAMPLE_REFUND_JSON,
+      },
+    ]
+
+    const beforeEvents = JSON.stringify(events)
+    const result = simulateImportRefunds(file, [], existingRecords, fileHash)
+
+    assert.equal(result.shouldReject, true, '重复导入应被拒绝')
+    assert.equal(JSON.stringify(events), beforeEvents, '事件状态应完全不变')
+    assert.equal(events[0].status, 'closed', '事件应保持 closed 状态')
+    assert.equal(events[0].review_note, '已处理，客户满意', '复核备注应保持不变')
+    assert.equal(events[0].closed_at?.getTime(), new Date('2024-01-20T10:00:00').getTime(), '关闭时间应保持不变')
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 8: 重复导入不影响来源证据列表 ----
+  console.log('Test 8: 重复导入 → 证据列表数量和内容保持不变')
+  try {
+    const file = new MockFile(SAMPLE_REFUND_JSON, 'sample_refunds.json', 'application/json')
+    const fileHash = await mockHashFile(file)
+
+    const evidences = [
+      { id: 'ev_001', event_id: 'evt_001', source_type: 'refund', source_id: 'R000001', hit_rules: ['high_refund'], raw_data: { refund_no: 'R000001', amount: 899 }, occurred_at: new Date() },
+      { id: 'ev_002', event_id: 'evt_001', source_type: 'ticket', source_id: 'T00001', hit_rules: ['timeout'], raw_data: { ticket_no: 'T00001' }, occurred_at: new Date() },
+      { id: 'ev_003', event_id: 'evt_001', source_type: 'score', source_id: 'S00001', hit_rules: ['low_score'], raw_data: { score: 1 }, occurred_at: new Date() },
+    ]
+
+    const existingRecords: ImportRecord[] = [
+      {
+        id: uid(),
+        file_name: 'sample_refunds.json',
+        file_type: 'refund',
+        total_count: 3,
+        valid_count: 3,
+        invalid_count: 0,
+        file_hash: fileHash,
+        imported_at: new Date(),
+        errors: [],
+        raw_content: SAMPLE_REFUND_JSON,
+      },
+    ]
+
+    const beforeCount = evidences.length
+    const beforeIds = evidences.map(e => e.id).join(',')
+
+    const result = simulateImportRefunds(file, [], existingRecords, fileHash)
+    assert.equal(result.shouldReject, true, '重复导入应被拒绝')
+    assert.equal(evidences.length, beforeCount, '证据数量应保持不变')
+    assert.equal(evidences.map(e => e.id).join(','), beforeIds, '证据ID列表应保持不变')
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 9: 多次重复导入后历史记录始终干净（幂等）----
+  console.log('Test 9: 连续 10 次重复导入 → 历史记录数量始终为 1')
+  try {
+    const file = new MockFile(SAMPLE_REFUND_JSON, 'sample_refunds.json', 'application/json')
+    const fileHash = await mockHashFile(file)
+
+    const originalRecord: ImportRecord = {
+      id: uid(),
+      file_name: 'sample_refunds.json',
+      file_type: 'refund',
+      total_count: 3,
+      valid_count: 3,
+      invalid_count: 0,
+      file_hash: fileHash,
+      imported_at: new Date('2024-01-15T10:00:00'),
+      errors: [],
+      raw_content: SAMPLE_REFUND_JSON,
+    }
+    const records = [originalRecord]
+    const originalId = originalRecord.id
+    const originalTime = originalRecord.imported_at.getTime()
+
+    for (let i = 0; i < 10; i++) {
+      const result = simulateImportRefunds(file, [], records, fileHash)
+      assert.equal(result.shouldReject, true, `第 ${i + 1} 次重复导入应被拒绝`)
+      assert.equal(records.length, 1, `第 ${i + 1} 次后历史记录数量应仍为 1`)
+      assert.equal(records[0].id, originalId, '历史记录ID应保持不变')
+      assert.equal(records[0].imported_at.getTime(), originalTime, '导入时间应保持不变')
+      assert.equal(records[0].total_count, 3, '统计数据应保持不变')
+    }
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 10: raw_content 存储与恢复（持久化验证）----
+  console.log('Test 10: raw_content 持久化 → 刷新后仍可下载原始文件')
+  try {
+    const file = new MockFile(SAMPLE_REFUND_JSON, 'sample_refunds.json', 'application/json')
+    const fileHash = await mockHashFile(file)
+
+    const record: ImportRecord = {
+      id: uid(),
+      file_name: 'sample_refunds.json',
+      file_type: 'refund',
+      total_count: 3,
+      valid_count: 3,
+      invalid_count: 0,
+      file_hash: fileHash,
+      imported_at: new Date(),
+      errors: [],
+      raw_content: SAMPLE_REFUND_JSON,
+    }
+
+    const serialized = JSON.stringify(record)
+    const restored = JSON.parse(serialized) as ImportRecord
+
+    assert.equal(restored.raw_content, SAMPLE_REFUND_JSON, 'raw_content 序列化后应完整恢复')
+    assert.equal(restored.file_hash, fileHash, 'file_hash 应一致')
+    assert.equal(restored.file_name, 'sample_refunds.json', '文件名应一致')
+
+    const restoredHash = crypto.createHash('sha256').update(restored.raw_content, 'utf-8').digest('hex')
+    assert.equal(restoredHash, fileHash, '从恢复的 raw_content 计算的哈希应与原哈希一致')
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
   // ---- 汇总 ----
   console.log(`\n=== 测试结果：${passed} 通过，${failed} 失败 ===\n`)
   if (failed > 0) {

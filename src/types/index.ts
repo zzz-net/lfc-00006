@@ -90,6 +90,7 @@ export interface ImportRecord {
   file_hash: string
   imported_at: Date
   errors: ImportError[]
+  raw_content: string
 }
 
 export interface ImportResult {

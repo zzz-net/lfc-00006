@@ -34,6 +34,7 @@ export async function importTicketsFile(
       file_hash: '',
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newTickets: [], record, success: false, warnings, errors };
   }
@@ -55,6 +56,7 @@ export async function importTicketsFile(
       file_hash: fileHash,
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newTickets: [], record, success: false, warnings, errors };
   }
@@ -75,6 +77,7 @@ export async function importTicketsFile(
       file_hash: fileHash,
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newTickets: [], record, success: false, warnings, errors };
   }
@@ -128,6 +131,7 @@ export async function importTicketsFile(
     file_hash: fileHash,
     imported_at: new Date(),
     errors: importErrors,
+    raw_content: csvText,
   };
   return { newTickets, record, success: errors.length === 0, warnings, errors };
 }
@@ -156,6 +160,7 @@ export async function importScoresFile(
       file_hash: '',
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newScores: [], record, success: false, warnings, errors };
   }
@@ -177,6 +182,7 @@ export async function importScoresFile(
       file_hash: fileHash,
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newScores: [], record, success: false, warnings, errors };
   }
@@ -197,6 +203,7 @@ export async function importScoresFile(
       file_hash: fileHash,
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newScores: [], record, success: false, warnings, errors };
   }
@@ -246,6 +253,7 @@ export async function importScoresFile(
     file_hash: fileHash,
     imported_at: new Date(),
     errors: importErrors,
+    raw_content: csvText,
   };
   return { newScores, record, success: errors.length === 0, warnings, errors };
 }
@@ -275,6 +283,7 @@ export async function importRefundsFile(
       file_hash: '',
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newRefunds: [], record, success: false, warnings, errors };
   }
@@ -302,6 +311,7 @@ export async function importRefundsFile(
       file_hash: fileHash,
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newRefunds: [], record, success: false, warnings, errors };
   }
@@ -325,6 +335,7 @@ export async function importRefundsFile(
       file_hash: fileHash,
       imported_at: new Date(),
       errors: [],
+      raw_content: '',
     };
     return { newRefunds: [], record, success: false, warnings, errors };
   }
@@ -375,6 +386,7 @@ export async function importRefundsFile(
     file_hash: fileHash,
     imported_at: new Date(),
     errors: importErrors,
+    raw_content: jsonText,
   };
   return { newRefunds, record, success: errors.length === 0, warnings, errors };
 }
