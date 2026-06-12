@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import AppLayout from '@/components/layout/AppLayout'
 import FileUploadZone from '@/components/ui/FileUploadZone'
 import ImportRecordList from '@/components/ui/ImportRecordList'
 import ValidationReport from '@/components/ui/ValidationReport'
 import { useAppStore } from '@/store'
 import { useToast } from '@/components/ToastProvider'
-import { Sparkles, Loader2 } from 'lucide-react'
+import { Sparkles, Loader2, Download } from 'lucide-react'
+import { generateSampleFiles } from '@/sample/generator'
+import { downloadBlob } from '@/services/exportService'
 
 export default function ImportPage() {
   const importTickets = useAppStore((s) => s.importTickets)
@@ -15,6 +17,14 @@ export default function ImportPage() {
   const records = useAppStore((s) => s.importRecords)
   const toast = useToast()
   const [loading, setLoading] = useState(false)
+  const sampleCacheRef = useRef<ReturnType<typeof generateSampleFiles> | null>(null)
+
+  const getCachedSamples = () => {
+    if (!sampleCacheRef.current) {
+      sampleCacheRef.current = generateSampleFiles()
+    }
+    return sampleCacheRef.current
+  }
 
   const handleGenerateSample = async () => {
     setLoading(true)
@@ -31,61 +41,106 @@ export default function ImportPage() {
     }
   }
 
+  const downloadSampleTicket = () => {
+    const samples = getCachedSamples()
+    downloadBlob(new Blob([samples.ticketsCSV], { type: 'text/csv;charset=utf-8' }), 'sample_tickets.csv')
+    toast.success('工单样例 CSV 已下载')
+  }
+
+  const downloadSampleScore = () => {
+    const samples = getCachedSamples()
+    downloadBlob(new Blob([samples.scoresCSV], { type: 'text/csv;charset=utf-8' }), 'sample_scores.csv')
+    toast.success('评分样例 CSV 已下载')
+  }
+
+  const downloadSampleRefund = () => {
+    const samples = getCachedSamples()
+    downloadBlob(new Blob([samples.refundsJSON], { type: 'application/json' }), 'sample_refunds.json')
+    toast.success('退款样例 JSON 已下载')
+  }
+
   return (
     <AppLayout title="数据导入">
       <div className="space-y-6">
         <section className="grid grid-cols-3 gap-4">
-          <FileUploadZone
-            theme="blue"
-            label="客服工单CSV"
-            description="字段: ticket_no, customer_id, title, content, category, created_at, resolved_at, status, agent_id"
-            accept=".csv"
-            onUpload={async (file) => {
-              const r = await importTickets(file)
-              if (r.success && r.errors.length === 0) {
-                toast.success(`工单导入成功：新增 ${r.record?.valid_count || 0} 条有效记录`)
-              } else if (r.errors.length > 0) {
-                toast.warning(`工单导入完成：有效 ${r.record?.valid_count || 0} 条，错误 ${r.errors.length} 条`)
-              } else {
-                toast.error(`工单导入失败：${r.errors[0] || '未知错误'}`)
-              }
-              return { success: r.success, warnings: r.warnings, errors: r.errors }
-            }}
-          />
-          <FileUploadZone
-            theme="violet"
-            label="回访评分CSV"
-            description="字段: customer_id, ticket_no, score, comment, visited_at"
-            accept=".csv"
-            onUpload={async (file) => {
-              const r = await importScores(file)
-              if (r.success && r.errors.length === 0) {
-                toast.success(`评分导入成功：新增 ${r.record?.valid_count || 0} 条有效记录`)
-              } else if (r.errors.length > 0) {
-                toast.warning(`评分导入完成：有效 ${r.record?.valid_count || 0} 条，错误 ${r.errors.length} 条`)
-              } else {
-                toast.error(`评分导入失败：${r.errors[0] || '未知错误'}`)
-              }
-              return { success: r.success, warnings: r.warnings, errors: r.errors }
-            }}
-          />
-          <FileUploadZone
-            theme="red"
-            label="退款JSON"
-            description="字段数组: refund_no, customer_id, order_no, amount, reason, refunded_at"
-            accept=".json"
-            onUpload={async (file) => {
-              const r = await importRefunds(file)
-              if (r.success && r.errors.length === 0) {
-                toast.success(`退款导入成功：新增 ${r.record?.valid_count || 0} 条有效记录`)
-              } else if (r.errors.length > 0) {
-                toast.warning(`退款导入完成：有效 ${r.record?.valid_count || 0} 条，错误 ${r.errors.length} 条`)
-              } else {
-                toast.error(`退款导入失败：${r.errors[0] || '未知错误'}`)
-              }
-              return { success: r.success, warnings: r.warnings, errors: r.errors }
-            }}
-          />
+          <div className="space-y-3">
+            <FileUploadZone
+              theme="blue"
+              label="客服工单CSV"
+              description="字段: ticket_no, customer_id, title, content, category, created_at, resolved_at, status, agent_id"
+              accept=".csv"
+              onUpload={async (file) => {
+                const r = await importTickets(file)
+                if (r.success && r.errors.length === 0) {
+                  toast.success(`工单导入成功：新增 ${r.record?.valid_count || 0} 条有效记录`)
+                } else if (r.errors.length > 0) {
+                  toast.warning(`工单导入完成：有效 ${r.record?.valid_count || 0} 条，错误 ${r.errors.length} 条`)
+                } else {
+                  toast.error(`工单导入失败：${r.errors[0] || '未知错误'}`)
+                }
+                return { success: r.success, warnings: r.warnings, errors: r.errors }
+              }}
+            />
+            <button
+              onClick={downloadSampleTicket}
+              className="w-full py-2.5 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100 hover:border-blue-300 transition-all inline-flex items-center justify-center gap-1.5"
+            >
+              <Download className="w-4 h-4" />
+              下载工单样例 CSV
+            </button>
+          </div>
+          <div className="space-y-3">
+            <FileUploadZone
+              theme="violet"
+              label="回访评分CSV"
+              description="字段: customer_id, ticket_no, score, comment, visited_at"
+              accept=".csv"
+              onUpload={async (file) => {
+                const r = await importScores(file)
+                if (r.success && r.errors.length === 0) {
+                  toast.success(`评分导入成功：新增 ${r.record?.valid_count || 0} 条有效记录`)
+                } else if (r.errors.length > 0) {
+                  toast.warning(`评分导入完成：有效 ${r.record?.valid_count || 0} 条，错误 ${r.errors.length} 条`)
+                } else {
+                  toast.error(`评分导入失败：${r.errors[0] || '未知错误'}`)
+                }
+                return { success: r.success, warnings: r.warnings, errors: r.errors }
+              }}
+            />
+            <button
+              onClick={downloadSampleScore}
+              className="w-full py-2.5 rounded-xl border border-violet-200 bg-violet-50 text-violet-700 text-sm font-medium hover:bg-violet-100 hover:border-violet-300 transition-all inline-flex items-center justify-center gap-1.5"
+            >
+              <Download className="w-4 h-4" />
+              下载评分样例 CSV
+            </button>
+          </div>
+          <div className="space-y-3">
+            <FileUploadZone
+              theme="red"
+              label="退款JSON"
+              description="字段数组: refund_no, customer_id, order_no, amount, reason, refunded_at"
+              accept=".json"
+              onUpload={async (file) => {
+                const r = await importRefunds(file)
+                if (r.success && r.errors.length === 0) {
+                  toast.success(`退款导入成功：新增 ${r.record?.valid_count || 0} 条有效记录`)
+                } else if (r.errors.length > 0) {
+                  toast.warning(`退款导入完成：有效 ${r.record?.valid_count || 0} 条，错误 ${r.errors.length} 条`)
+                } else {
+                  toast.error(`退款导入失败：${r.errors[0] || '未知错误'}`)
+                }
+                return { success: r.success, warnings: r.warnings, errors: r.errors }
+              }}
+            />
+            <button
+              onClick={downloadSampleRefund}
+              className="w-full py-2.5 rounded-xl border border-red-200 bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 hover:border-red-300 transition-all inline-flex items-center justify-center gap-1.5"
+            >
+              <Download className="w-4 h-4" />
+              下载退款样例 JSON
+            </button>
+          </div>
         </section>
 
         <section>

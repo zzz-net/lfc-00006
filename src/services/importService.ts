@@ -254,7 +254,7 @@ export async function importRefundsFile(
   file: File,
   existingRefunds: Refund[],
   existingImportRecords: ImportRecord[]
-): Promise<{ newRefunds: Refund[]; record: ImportRecord; success: boolean; warnings: string[]; errors: string[] }> {
+): Promise<{ newRefunds: Refund[]; record?: ImportRecord; success: boolean; warnings: string[]; errors: string[] }> {
   const warnings: string[] = [];
   const errors: string[] = [];
   const importErrors: ImportError[] = [];
@@ -282,18 +282,7 @@ export async function importRefundsFile(
   const duplicate = existingImportRecords.find(r => r.file_type === 'refund' && r.file_hash === fileHash);
   if (duplicate) {
     errors.push(`该退款文件已导入过(记录ID: ${duplicate.id})，拒绝重复导入`);
-    const record: ImportRecord = {
-      id: uid(),
-      file_name: file.name,
-      file_type: 'refund',
-      total_count: 0,
-      valid_count: 0,
-      invalid_count: 0,
-      file_hash: fileHash,
-      imported_at: new Date(),
-      errors: [],
-    };
-    return { newRefunds: [], record, success: false, warnings, errors };
+    return { newRefunds: [], success: false, warnings, errors };
   }
 
   const existingRefundNos = new Set(existingRefunds.map(r => r.refund_no));
