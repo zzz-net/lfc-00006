@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { QualityEvent, EventStatus } from '@/types'
 import { useAppStore } from '@/store'
-import { Clock, Eye, CheckCircle2, Search, Filter } from 'lucide-react'
+import { Clock, Eye, CheckCircle2, Search, Filter, CheckSquare, Square, AlertTriangle } from 'lucide-react'
 import { cn, formatDateCN } from '@/lib/utils'
 import { typeMap, statusMap } from './EventTable'
 
@@ -19,9 +19,12 @@ interface ReviewQueueProps {
   onSelect: (id: string) => void
   selectedIds: Set<string>
   onToggleSelect: (id: string) => void
+  onSelectAll: (ids: string[]) => void
   onClearSelection: () => void
   filterStatus: FilterStatus
   onFilterChange: (s: FilterStatus) => void
+  expectedStatuses: Record<string, EventStatus>
+  onExpectedStatusesChange: (statuses: Record<string, EventStatus>) => void
 }
 
 export default function ReviewQueue({
@@ -29,26 +32,109 @@ export default function ReviewQueue({
   onSelect,
   selectedIds,
   onToggleSelect,
+  onSelectAll,
+  onClearSelection,
   filterStatus,
   onFilterChange,
+  expectedStatuses,
+  onExpectedStatusesChange,
 }: ReviewQueueProps) {
   const events = useAppStore((s) => s.events)
   const [search, setSearch] = useState('')
 
-  const filtered = events.filter((e) => {
-    if (filterStatus !== 'all' && e.status !== filterStatus) return false
-    if (search) {
-      const s = search.toLowerCase()
-      if (!e.title.toLowerCase().includes(s) && !e.customer_id.toLowerCase().includes(s)) return false
-    }
-    return true
-  })
+  const filtered = useMemo(() => {
+    return events.filter((e) => {
+      if (filterStatus !== 'all' && e.status !== filterStatus) return false
+      if (search) {
+        const s = search.toLowerCase()
+        if (!e.title.toLowerCase().includes(s) && !e.customer_id.toLowerCase().includes(s)) return false
+      }
+      return true
+    })
+  }, [events, filterStatus, search])
 
-  const counts = {
+  const counts = useMemo(() => ({
     all: events.length,
     pending: events.filter((e) => e.status === 'pending').length,
     reviewing: events.filter((e) => e.status === 'reviewing').length,
     closed: events.filter((e) => e.status === 'closed').length,
+  }), [events])
+
+  const filteredIds = useMemo(() => new Set(filtered.map((e) => e.id)), [filtered])
+
+  const allFilteredSelected = useMemo(() => {
+    return filtered.length > 0 && filtered.every((e) => selectedIds.has(e.id))
+  }, [filtered, selectedIds])
+
+  const someFilteredSelected = useMemo(() => {
+    return filtered.some((e) => selectedIds.has(e.id))
+  }, [filtered, selectedIds])
+
+  const selectedInFilter = useMemo(() => {
+    return filtered.filter((e) => selectedIds.has(e.id)).length
+  }, [filtered, selectedIds])
+
+  const outOfFilterSelected = useMemo(() => {
+    let count = 0
+    for (const id of selectedIds) {
+      if (!filteredIds.has(id)) count++
+    }
+    return count
+  }, [selectedIds, filteredIds])
+
+  const getStatusChangedIds = useMemo(() => {
+    const changed: string[] = []
+    for (const id of selectedIds) {
+      const event = events.find((e) => e.id === id)
+      if (event && expectedStatuses[id] !== undefined && expectedStatuses[id] !== event.status) {
+        changed.push(id)
+      }
+    }
+    return changed
+  }, [selectedIds, events, expectedStatuses])
+
+  useEffect(() => {
+    const newExpectedStatuses: Record<string, EventStatus> = {}
+    for (const event of events) {
+      if (selectedIds.has(event.id)) {
+        newExpectedStatuses[event.id] = event.status
+      }
+    }
+    for (const id of Object.keys(expectedStatuses)) {
+      if (!selectedIds.has(id)) {
+        continue
+      }
+      if (!newExpectedStatuses[id]) {
+        newExpectedStatuses[id] = expectedStatuses[id]
+      }
+    }
+    if (JSON.stringify(newExpectedStatuses) !== JSON.stringify(expectedStatuses)) {
+      onExpectedStatusesChange(newExpectedStatuses)
+    }
+  }, [selectedIds, events])
+
+  const handleSelectAll = () => {
+    if (allFilteredSelected) {
+      const newSelected = new Set(selectedIds)
+      for (const id of filteredIds) {
+        newSelected.delete(id)
+      }
+      if (newSelected.size === 0) {
+        onClearSelection()
+      } else {
+        for (const id of filteredIds) {
+          onToggleSelect(id)
+        }
+      }
+    } else {
+      const idsToAdd: string[] = []
+      for (const e of filtered) {
+        if (!selectedIds.has(e.id)) {
+          idsToAdd.push(e.id)
+        }
+      }
+      onSelectAll(idsToAdd)
+    }
   }
 
   return (
@@ -82,6 +168,38 @@ export default function ReviewQueue({
         </div>
       </div>
 
+      <div className="px-4 py-2 border-b border-slate-100 bg-slate-50/50 shrink-0">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSelectAll}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+            >
+              {allFilteredSelected ? (
+                <CheckSquare className="w-3.5 h-3.5 text-blue-600" />
+              ) : someFilteredSelected ? (
+                <CheckSquare className="w-3.5 h-3.5 text-blue-600 opacity-60" />
+              ) : (
+                <Square className="w-3.5 h-3.5 text-slate-400" />
+              )}
+              {allFilteredSelected ? '取消全选' : '全选当前'}
+              <span className="text-slate-400">({filtered.length})</span>
+            </button>
+            {outOfFilterSelected > 0 && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-amber-600">
+                <AlertTriangle className="w-3 h-3" />
+                {outOfFilterSelected} 项在当前筛选外已选中
+              </span>
+            )}
+          </div>
+          {selectedInFilter > 0 && (
+            <span className="text-[11px] text-slate-500">
+              当前列表已选 {selectedInFilter} / {filtered.length}
+            </span>
+          )}
+        </div>
+      </div>
+
       <div className="flex-1 overflow-y-auto p-3 space-y-2">
         {filtered.length === 0 ? (
           <div className="py-16 text-center">
@@ -96,6 +214,7 @@ export default function ReviewQueue({
             const StatusIcon = st.icon
             const isSelectedCard = selectedEventId === ev.id
             const isChecked = selectedIds.has(ev.id)
+            const hasStatusChanged = getStatusChangedIds.includes(ev.id)
             return (
               <div
                 key={ev.id}
@@ -105,26 +224,32 @@ export default function ReviewQueue({
                   'group relative rounded-xl border p-3.5 cursor-pointer transition-all duration-150 animate-fade-in',
                   isSelectedCard
                     ? 'border-blue-400 bg-blue-50/60 shadow-md ring-2 ring-blue-100'
+                    : hasStatusChanged
+                    ? 'border-amber-300 bg-amber-50/50'
                     : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
                 )}
               >
                 <div className="flex items-start gap-2.5">
-                  {ev.status === 'pending' && (
-                    <label
-                      className="mt-0.5 shrink-0"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => onToggleSelect(ev.id)}
-                        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-400 cursor-pointer"
-                      />
-                    </label>
-                  )}
+                  <label
+                    className="mt-0.5 shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => onToggleSelect(ev.id)}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-400 cursor-pointer"
+                    />
+                  </label>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2 mb-1.5">
                       <p className="text-sm font-semibold text-slate-800 leading-snug truncate">{ev.title}</p>
+                      {hasStatusChanged && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded shrink-0">
+                          <AlertTriangle className="w-3 h-3" />
+                          状态已变
+                        </span>
+                      )}
                     </div>
                     <div className="flex flex-wrap gap-1 mb-2">
                       {ev.types.map((t) => (

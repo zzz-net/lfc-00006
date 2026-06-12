@@ -10,7 +10,13 @@ import type {
   ImportRecord,
   EventStatus,
   QualityEventType,
+  BatchActionType,
+  BatchActionResult,
+  BatchActionTarget,
+  BatchActionSkipReason,
+  BatchOperation,
 } from '@/types'
+import { uid } from '@/utils'
 import { runAnalysis } from '@/services/analyzeService'
 import { importTicketsFile, importScoresFile, importRefundsFile } from '@/services/importService'
 import { generateSampleFiles } from '@/sample/generator'
@@ -41,6 +47,7 @@ interface AppState {
   importRecords: ImportRecord[]
   rules: QualityRule
   uiState: UIState
+  lastBatchOperation: BatchOperation | null
 
   setSelectedEvent: (id: string | null) => void
   setDrawerOpen: (open: boolean) => void
@@ -58,6 +65,16 @@ interface AppState {
   updateEventStatus: (eventId: string, status: EventStatus, note?: string) => void
   closeEvent: (eventId: string, note?: string) => void
   batchUpdateStatus: (eventIds: string[], status: EventStatus) => void
+
+  executeBatchAction: (
+    eventIds: string[],
+    action: BatchActionType,
+    note: string,
+    expectedStatuses?: Record<string, EventStatus>
+  ) => BatchActionResult
+
+  undoLastBatchOperation: () => { success: boolean; restoredCount: number; message: string }
+  canUndoBatchOperation: () => boolean
 
   exportEvents: (filter: { statuses?: EventStatus[]; types?: QualityEventType[]; includeEvidences: boolean }, format: 'csv' | 'json') => void
   exportEvidences: (filter: { statuses?: EventStatus[]; types?: QualityEventType[] }) => void
@@ -113,6 +130,12 @@ const dateAwareStorage = {
   },
 }
 
+const BATCH_ACTION_STATUS_MAP: Record<BatchActionType, EventStatus> = {
+  confirm: 'closed',
+  ignore: 'closed',
+  reopen: 'pending',
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -128,6 +151,7 @@ export const useAppStore = create<AppState>()(
         drawerOpen: false,
         lastAnalysisAt: null,
       },
+      lastBatchOperation: null,
 
       setSelectedEvent: (id) => set((s) => ({ uiState: { ...s.uiState, selectedEventId: id, drawerOpen: id !== null } })),
       setDrawerOpen: (open) => set((s) => ({ uiState: { ...s.uiState, drawerOpen: open } })),
@@ -292,6 +316,127 @@ export const useAppStore = create<AppState>()(
         }))
       },
 
+      executeBatchAction: (eventIds, action, note, expectedStatuses) => {
+        const now = new Date()
+        const operationId = uid()
+        const targetStatus = BATCH_ACTION_STATUS_MAP[action]
+        const { events } = get()
+
+        const targets: BatchActionTarget[] = []
+        const skipped: BatchActionSkipReason[] = []
+
+        for (const id of eventIds) {
+          const event = events.find((e) => e.id === id)
+
+          if (!event) {
+            skipped.push({ id, reason: 'not_found' })
+            continue
+          }
+
+          if (event.status === 'closed' && action !== 'reopen') {
+            skipped.push({
+              id,
+              reason: 'already_closed',
+              expectedStatus: expectedStatuses?.[id],
+              actualStatus: event.status,
+            })
+            continue
+          }
+
+          if (expectedStatuses && expectedStatuses[id] !== undefined && expectedStatuses[id] !== event.status) {
+            skipped.push({
+              id,
+              reason: 'status_changed',
+              expectedStatus: expectedStatuses[id],
+              actualStatus: event.status,
+            })
+            continue
+          }
+
+          targets.push({
+            id: event.id,
+            originalStatus: event.status,
+            originalNote: event.review_note,
+            originalReviewedAt: event.reviewed_at,
+            originalClosedAt: event.closed_at,
+          })
+        }
+
+        const targetIdSet = new Set(targets.map((t) => t.id))
+
+        set((s) => ({
+          events: s.events.map((e) => {
+            if (!targetIdSet.has(e.id)) return e
+            const hasNote = note && note.trim().length > 0
+            return {
+              ...e,
+              status: targetStatus,
+              review_note: hasNote ? note.trim() : e.review_note,
+              reviewed_at: targetStatus === 'reviewing' || targetStatus === 'closed' ? now : e.reviewed_at,
+              closed_at: targetStatus === 'closed' ? now : e.closed_at,
+            }
+          }),
+          lastBatchOperation: {
+            id: operationId,
+            action,
+            targetStatus,
+            note,
+            targets: [...targets],
+            executedAt: now,
+          },
+        }))
+
+        return {
+          action,
+          targetStatus,
+          totalRequested: eventIds.length,
+          successCount: targets.length,
+          skipCount: skipped.length,
+          skipped,
+          targets,
+          note,
+          executedAt: now,
+          operationId,
+        }
+      },
+
+      undoLastBatchOperation: () => {
+        const { lastBatchOperation } = get()
+
+        if (!lastBatchOperation) {
+          return { success: false, restoredCount: 0, message: '没有可撤销的批量操作' }
+        }
+
+        const { targets } = lastBatchOperation
+        const targetIdSet = new Set(targets.map((t) => t.id))
+
+        set((s) => ({
+          events: s.events.map((e) => {
+            if (!targetIdSet.has(e.id)) return e
+            const target = targets.find((t) => t.id === e.id)
+            if (!target) return e
+            return {
+              ...e,
+              status: target.originalStatus,
+              review_note: target.originalNote,
+              reviewed_at: target.originalReviewedAt,
+              closed_at: target.originalClosedAt,
+            }
+          }),
+          lastBatchOperation: null,
+        }))
+
+        return {
+          success: true,
+          restoredCount: targets.length,
+          message: `已撤销批量操作，恢复了 ${targets.length} 条事件的状态`,
+        }
+      },
+
+      canUndoBatchOperation: () => {
+        return get().lastBatchOperation !== null
+      },
+
       exportEvents: (filter, format) => {
         const { events, evidences } = get()
         const { filteredEvents, filteredEvidences } = buildExportFilteredEvents(events, evidences, filter)
@@ -374,6 +519,7 @@ export const useAppStore = create<AppState>()(
           importRecords: [],
           rules: { ...DEFAULT_RULES },
           uiState: { selectedEventId: null, drawerOpen: false, lastAnalysisAt: null },
+          lastBatchOperation: null,
         })
       },
     }),
@@ -388,6 +534,7 @@ export const useAppStore = create<AppState>()(
         evidences: state.evidences,
         importRecords: state.importRecords,
         rules: state.rules,
+        lastBatchOperation: state.lastBatchOperation,
       }),
     }
   )

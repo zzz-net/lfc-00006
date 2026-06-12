@@ -116,3 +116,42 @@ export interface ExportFilter {
   types?: QualityEventType[]
   includeEvidences: boolean
 }
+
+export type BatchActionType = 'confirm' | 'ignore' | 'reopen'
+
+export interface BatchActionTarget {
+  id: string
+  originalStatus: EventStatus
+  originalNote: string
+  originalReviewedAt: Date | null
+  originalClosedAt: Date | null
+}
+
+export interface BatchActionSkipReason {
+  id: string
+  reason: 'not_found' | 'already_closed' | 'status_changed'
+  expectedStatus?: EventStatus
+  actualStatus?: EventStatus
+}
+
+export interface BatchActionResult {
+  action: BatchActionType
+  targetStatus: EventStatus
+  totalRequested: number
+  successCount: number
+  skipCount: number
+  skipped: BatchActionSkipReason[]
+  targets: BatchActionTarget[]
+  note: string
+  executedAt: Date
+  operationId: string
+}
+
+export interface BatchOperation {
+  id: string
+  action: BatchActionType
+  targetStatus: EventStatus
+  note: string
+  targets: BatchActionTarget[]
+  executedAt: Date
+}
