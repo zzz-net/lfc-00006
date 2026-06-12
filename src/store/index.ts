@@ -20,6 +20,11 @@ import type {
   RuleScheme,
   SchemeAuditLog,
   SchemeAuditActionType,
+  ReviewPackage,
+  ReviewPackageStatus,
+  ReviewPackageCauseCategory,
+  ReviewPackageAuditLog,
+  ImportReviewPackageResult,
 } from '@/types'
 import { uid } from '@/utils'
 import { runAnalysis } from '@/services/analyzeService'
@@ -27,7 +32,15 @@ import { importTicketsFile, importScoresFile, importRefundsFile } from '@/servic
 import { generateSampleFiles } from '@/sample/generator'
 import { buildExportFilteredEvents, eventsToCSV, eventsToJSON, evidencesToCSV, buildFullBackup, parseFullBackup, downloadBlob } from '@/services/exportService'
 import { createSnapshot, generateUniqueSnapshotName, isSnapshotEmpty, snapshotsAreEqual } from '@/services/snapshotService'
-import { parseDate } from '@/utils'
+import {
+  createReviewPackage,
+  addRemark,
+  updateStatus,
+  exportReviewPackagesToJSON,
+  importReviewPackages,
+  createReviewPackageAuditLog,
+} from '@/services/reviewPackageService'
+import { parseDate, reviveDates } from '@/utils'
 import dayjs from 'dayjs'
 
 const DEFAULT_RULES: QualityRule = {
@@ -80,6 +93,8 @@ interface AppState {
   schemes: RuleScheme[]
   activeSchemeId: string | null
   schemeAuditLogs: SchemeAuditLog[]
+  reviewPackages: ReviewPackage[]
+  reviewPackageAuditLogs: ReviewPackageAuditLog[]
 
   setSelectedEvent: (id: string | null) => void
   setDrawerOpen: (open: boolean) => void
@@ -134,36 +149,36 @@ interface AppState {
   renameSnapshot: (snapshotId: string, newName: string) => { success: boolean; error?: string }
 
   resetAll: () => void
+
+  createReviewPackage: (
+    title: string,
+    responsible: string,
+    causeCategory: ReviewPackageCauseCategory,
+    handlingSuggestion: string,
+    deadline: Date | null,
+    eventIds: string[]
+  ) => { success: boolean; error?: string; pkg?: ReviewPackage }
+
+  getReviewPackage: (id: string) => ReviewPackage | undefined
+
+  updateReviewPackageStatus: (id: string, status: ReviewPackageStatus) => { success: boolean; error?: string }
+
+  addReviewPackageRemark: (id: string, content: string) => { success: boolean; error?: string }
+
+  deleteReviewPackage: (id: string) => { success: boolean; error?: string }
+
+  exportReviewPackages: (ids?: string[]) => void
+
+  importReviewPackages: (file: File) => Promise<ImportReviewPackageResult>
+
+  getReviewPackageAuditLogs: () => ReviewPackageAuditLog[]
+
+  getReviewPackageAuditLogsByPackageId: (packageId: string) => ReviewPackageAuditLog[]
 }
 
 function textToFile(text: string, filename: string, type: string): File {
   const blob = new Blob([text], { type })
   return new File([blob], filename, { type })
-}
-
-const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/
-
-function reviveDates(obj: any): any {
-  if (obj === null || obj === undefined) return obj
-  if (obj instanceof Date) return obj
-  if (typeof obj === 'string') {
-    if (ISO_DATE_REGEX.test(obj)) {
-      const d = parseDate(obj)
-      return d || obj
-    }
-    return obj
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(reviveDates)
-  }
-  if (typeof obj === 'object') {
-    const result: Record<string, any> = {}
-    for (const k of Object.keys(obj)) {
-      result[k] = reviveDates(obj[k])
-    }
-    return result
-  }
-  return obj
 }
 
 const dateAwareStorage = {
@@ -235,6 +250,8 @@ export const useAppStore = create<AppState>()(
       schemes: [createDefaultScheme()],
       activeSchemeId: DEFAULT_SCHEME_ID,
       schemeAuditLogs: [],
+      reviewPackages: [],
+      reviewPackageAuditLogs: [],
 
       setSelectedEvent: (id) => set((s) => ({ uiState: { ...s.uiState, selectedEventId: id, drawerOpen: id !== null } })),
       setDrawerOpen: (open) => set((s) => ({ uiState: { ...s.uiState, drawerOpen: open } })),
@@ -787,6 +804,29 @@ export const useAppStore = create<AppState>()(
             ...log,
             operated_at: log.operated_at.toISOString(),
           })),
+          reviewPackages: state.reviewPackages.map((pkg) => ({
+            ...pkg,
+            created_at: pkg.created_at.toISOString(),
+            updated_at: pkg.updated_at.toISOString(),
+            closed_at: pkg.closed_at ? pkg.closed_at.toISOString() : null,
+            deadline: pkg.deadline ? pkg.deadline.toISOString() : null,
+            event_snapshots: pkg.event_snapshots.map((s) => ({
+              ...s,
+              reviewed_at: s.reviewed_at ? s.reviewed_at.toISOString() : null,
+              closed_at: s.closed_at ? s.closed_at.toISOString() : null,
+              first_seen_at: s.first_seen_at.toISOString(),
+              last_seen_at: s.last_seen_at.toISOString(),
+              snapshotted_at: s.snapshotted_at.toISOString(),
+            })),
+            remarks: pkg.remarks.map((r) => ({
+              ...r,
+              created_at: r.created_at.toISOString(),
+            })),
+          })),
+          reviewPackageAuditLogs: state.reviewPackageAuditLogs.map((log) => ({
+            ...log,
+            operated_at: log.operated_at.toISOString(),
+          })),
         })
         const ts = dayjs().format('YYYYMMDD_HHmmss')
         downloadBlob(new Blob([backup], { type: 'application/json' }), `full_backup_${ts}.json`)
@@ -812,6 +852,8 @@ export const useAppStore = create<AppState>()(
           const restoredSchemes: RuleScheme[] = s.schemes || []
           const restoredActiveSchemeId: string | null = s.activeSchemeId || null
           const restoredAuditLogs: SchemeAuditLog[] = s.schemeAuditLogs || []
+          const restoredReviewPackages: ReviewPackage[] = s.reviewPackages || []
+          const restoredReviewPackageAuditLogs: ReviewPackageAuditLog[] = s.reviewPackageAuditLogs || []
 
           const hasDefaultScheme = restoredSchemes.some((sc: RuleScheme) => sc.is_default)
           const schemes = hasDefaultScheme ? restoredSchemes : [createDefaultScheme(), ...restoredSchemes]
@@ -833,6 +875,8 @@ export const useAppStore = create<AppState>()(
             schemes,
             activeSchemeId,
             schemeAuditLogs: restoredAuditLogs,
+            reviewPackages: restoredReviewPackages,
+            reviewPackageAuditLogs: restoredReviewPackageAuditLogs,
           })
           return {
             eventCount: events.length,
@@ -841,9 +885,21 @@ export const useAppStore = create<AppState>()(
             snapshotCount: snapshots.length,
             hasAuditLogs: restoredAuditLogs.length > 0,
             auditLogCount: restoredAuditLogs.length,
+            hasReviewPackages: restoredReviewPackages.length > 0,
+            reviewPackageCount: restoredReviewPackages.length,
           }
         } catch (e: any) {
-          return { eventCount: 0, success: false, error: e?.message || '恢复失败', hasSnapshots: false, snapshotCount: 0, hasAuditLogs: false, auditLogCount: 0 }
+          return {
+            eventCount: 0,
+            success: false,
+            error: e?.message || '恢复失败',
+            hasSnapshots: false,
+            snapshotCount: 0,
+            hasAuditLogs: false,
+            auditLogCount: 0,
+            hasReviewPackages: false,
+            reviewPackageCount: 0,
+          }
         }
       },
 
@@ -946,6 +1002,163 @@ export const useAppStore = create<AppState>()(
         return { success: true }
       },
 
+      createReviewPackage: (title, responsible, causeCategory, handlingSuggestion, deadline, eventIds) => {
+        const trimmedTitle = title.trim()
+        if (!trimmedTitle) {
+          return { success: false, error: '复盘包标题不能为空' }
+        }
+        if (!responsible.trim()) {
+          return { success: false, error: '负责人不能为空' }
+        }
+        if (eventIds.length === 0) {
+          return { success: false, error: '请至少选择一个质量事件' }
+        }
+
+        const { events, reviewPackages } = get()
+        const existingTitle = reviewPackages.find((p) => p.title === trimmedTitle)
+        if (existingTitle) {
+          return { success: false, error: '已存在同名复盘包，请使用其他标题' }
+        }
+
+        const selectedEvents = events.filter((e) => eventIds.includes(e.id))
+        if (selectedEvents.length !== eventIds.length) {
+          const missing = eventIds.filter((id) => !events.find((e) => e.id === id))
+          return { success: false, error: `部分事件不存在：${missing.join(', ')}` }
+        }
+
+        const pkg = createReviewPackage(
+          trimmedTitle,
+          responsible,
+          causeCategory,
+          handlingSuggestion,
+          deadline,
+          selectedEvents
+        )
+
+        const auditLog = createReviewPackageAuditLog('create', pkg, {
+          note: `创建复盘包，包含 ${selectedEvents.length} 个事件`,
+        })
+
+        set((s) => ({
+          reviewPackages: [pkg, ...s.reviewPackages],
+          reviewPackageAuditLogs: [auditLog, ...s.reviewPackageAuditLogs],
+        }))
+
+        return { success: true, pkg }
+      },
+
+      getReviewPackage: (id) => {
+        return get().reviewPackages.find((p) => p.id === id)
+      },
+
+      updateReviewPackageStatus: (id, status) => {
+        const { reviewPackages } = get()
+        const pkg = reviewPackages.find((p) => p.id === id)
+        if (!pkg) {
+          return { success: false, error: '复盘包不存在' }
+        }
+        if (pkg.status === status) {
+          return { success: false, error: '状态未变化' }
+        }
+
+        const { package: updated, auditLog } = updateStatus(pkg, status)
+
+        set((s) => ({
+          reviewPackages: s.reviewPackages.map((p) => (p.id === id ? updated : p)),
+          reviewPackageAuditLogs: [auditLog, ...s.reviewPackageAuditLogs],
+        }))
+
+        return { success: true }
+      },
+
+      addReviewPackageRemark: (id, content) => {
+        const trimmedContent = content.trim()
+        if (!trimmedContent) {
+          return { success: false, error: '备注内容不能为空' }
+        }
+
+        const { reviewPackages } = get()
+        const pkg = reviewPackages.find((p) => p.id === id)
+        if (!pkg) {
+          return { success: false, error: '复盘包不存在' }
+        }
+
+        const { package: updated, auditLog } = addRemark(pkg, trimmedContent)
+
+        set((s) => ({
+          reviewPackages: s.reviewPackages.map((p) => (p.id === id ? updated : p)),
+          reviewPackageAuditLogs: [auditLog, ...s.reviewPackageAuditLogs],
+        }))
+
+        return { success: true }
+      },
+
+      deleteReviewPackage: (id) => {
+        const { reviewPackages } = get()
+        const pkg = reviewPackages.find((p) => p.id === id)
+        if (!pkg) {
+          return { success: false, error: '复盘包不存在' }
+        }
+
+        const auditLog = createReviewPackageAuditLog('delete', pkg, {
+          note: '删除复盘包',
+        })
+
+        set((s) => ({
+          reviewPackages: s.reviewPackages.filter((p) => p.id !== id),
+          reviewPackageAuditLogs: [auditLog, ...s.reviewPackageAuditLogs],
+        }))
+
+        return { success: true }
+      },
+
+      exportReviewPackages: (ids) => {
+        const { reviewPackages } = get()
+        let packagesToExport = reviewPackages
+        if (ids && ids.length > 0) {
+          packagesToExport = reviewPackages.filter((p) => ids.includes(p.id))
+        }
+        if (packagesToExport.length === 0) {
+          return
+        }
+        const json = exportReviewPackagesToJSON(packagesToExport)
+        const ts = dayjs().format('YYYYMMDD_HHmmss')
+        const filename = ids && ids.length === 1
+          ? `review_package_${packagesToExport[0].title.replace(/[^\w\u4e00-\u9fa5]/g, '_')}_${ts}.json`
+          : `review_packages_${ts}.json`
+        downloadBlob(new Blob([json], { type: 'application/json' }), filename)
+      },
+
+      importReviewPackages: async (file) => {
+        const text = await file.text()
+        const { reviewPackages } = get()
+        const result = importReviewPackages(text, reviewPackages)
+
+        if (result.imported.length > 0) {
+          const auditLogs = result.imported.map((pkg) =>
+            createReviewPackageAuditLog('import', pkg, {
+              importSource: file.name,
+              note: `从文件 ${file.name} 导入复盘包`,
+            })
+          )
+
+          set((s) => ({
+            reviewPackages: [...result.imported, ...s.reviewPackages],
+            reviewPackageAuditLogs: [...auditLogs, ...s.reviewPackageAuditLogs],
+          }))
+        }
+
+        return result
+      },
+
+      getReviewPackageAuditLogs: () => {
+        return get().reviewPackageAuditLogs
+      },
+
+      getReviewPackageAuditLogsByPackageId: (packageId) => {
+        return get().reviewPackageAuditLogs.filter((log) => log.package_id === packageId)
+      },
+
       resetAll: () => {
         set({
           tickets: [],
@@ -962,6 +1175,8 @@ export const useAppStore = create<AppState>()(
           schemes: [createDefaultScheme()],
           activeSchemeId: DEFAULT_SCHEME_ID,
           schemeAuditLogs: [],
+          reviewPackages: [],
+          reviewPackageAuditLogs: [],
         })
       },
     }),
@@ -982,6 +1197,8 @@ export const useAppStore = create<AppState>()(
         schemes: state.schemes,
         activeSchemeId: state.activeSchemeId,
         schemeAuditLogs: state.schemeAuditLogs,
+        reviewPackages: state.reviewPackages,
+        reviewPackageAuditLogs: state.reviewPackageAuditLogs,
       }),
     }
   )

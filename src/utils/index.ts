@@ -244,3 +244,28 @@ export function validateRefund(
   }
   return { valid: Object.keys(fieldErrors).length === 0, fieldErrors, errors }
 }
+
+const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/
+
+export function reviveDates(obj: any): any {
+  if (obj === null || obj === undefined) return obj
+  if (obj instanceof Date) return obj
+  if (typeof obj === 'string') {
+    if (ISO_DATE_REGEX.test(obj)) {
+      const d = parseDate(obj)
+      return d || obj
+    }
+    return obj
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(reviveDates)
+  }
+  if (typeof obj === 'object') {
+    const result: Record<string, any> = {}
+    for (const k of Object.keys(obj)) {
+      result[k] = reviveDates(obj[k])
+    }
+    return result
+  }
+  return obj
+}

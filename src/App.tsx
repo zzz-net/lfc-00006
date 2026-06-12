@@ -6,6 +6,9 @@ import RulesPage from "@/pages/RulesPage";
 import ReviewPage from "@/pages/ReviewPage";
 import SnapshotsPage from "@/pages/SnapshotsPage";
 import ExportPage from "@/pages/ExportPage";
+import ReviewPackagesPage from "@/pages/ReviewPackagesPage";
+import ReviewPackageCreatePage from "@/pages/ReviewPackageCreatePage";
+import ReviewPackageDetailPage from "@/pages/ReviewPackageDetailPage";
 
 export default function App() {
   return (
@@ -18,6 +21,9 @@ export default function App() {
           <Route path="/review" element={<ReviewPage />} />
           <Route path="/snapshots" element={<SnapshotsPage />} />
           <Route path="/export" element={<ExportPage />} />
+          <Route path="/review-packages" element={<ReviewPackagesPage />} />
+          <Route path="/review-packages/create" element={<ReviewPackageCreatePage />} />
+          <Route path="/review-packages/:id" element={<ReviewPackageDetailPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>

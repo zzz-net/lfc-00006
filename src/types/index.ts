@@ -271,3 +271,84 @@ export interface SchemeAuditLog {
   new_name?: string
   note?: string
 }
+
+export type ReviewPackageStatus = 'draft' | 'analyzing' | 'resolved' | 'archived'
+
+export type ReviewPackageCauseCategory =
+  | 'process_issue'
+  | 'training_issue'
+  | 'system_issue'
+  | 'personnel_issue'
+  | 'customer_issue'
+  | 'other'
+
+export interface QualityEventSnapshot {
+  id: string
+  customer_id: string
+  title: string
+  types: QualityEventType[]
+  status: EventStatus
+  review_note: string
+  reviewed_at: Date | null
+  closed_at: Date | null
+  first_seen_at: Date
+  last_seen_at: Date
+  evidence_count: number
+  total_refund: number
+  snapshotted_at: Date
+}
+
+export interface ReviewPackageRemark {
+  id: string
+  content: string
+  operator: string
+  created_at: Date
+}
+
+export interface ReviewPackage {
+  id: string
+  title: string
+  responsible: string
+  cause_category: ReviewPackageCauseCategory
+  handling_suggestion: string
+  deadline: Date | null
+  status: ReviewPackageStatus
+  event_snapshots: QualityEventSnapshot[]
+  event_ids: string[]
+  remarks: ReviewPackageRemark[]
+  created_at: Date
+  updated_at: Date
+  closed_at: Date | null
+}
+
+export type ReviewPackageActionType = 'create' | 'add_remark' | 'status_change' | 'import' | 'delete'
+
+export interface ReviewPackageAuditLog {
+  id: string
+  action: ReviewPackageActionType
+  package_id: string
+  package_title: string
+  operator: string
+  operated_at: Date
+  old_status?: ReviewPackageStatus
+  new_status?: ReviewPackageStatus
+  remark_content?: string
+  import_source?: string
+  note?: string
+}
+
+export interface ImportReviewPackageConflict {
+  type: 'duplicate_id' | 'duplicate_title'
+  package_id: string
+  package_title: string
+  existing_title?: string
+  existing_id?: string
+}
+
+export interface ImportReviewPackageResult {
+  success: boolean
+  imported: ReviewPackage[]
+  skipped: ImportReviewPackageConflict[]
+  warnings: string[]
+  errors: string[]
+}
