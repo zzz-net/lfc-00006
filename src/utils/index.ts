@@ -11,6 +11,14 @@ export function uid(prefix: string = 'id'): string {
   return `${prefix}_${ts}_${rand}`
 }
 
+export function deterministicId(prefix: string, seed: string): string {
+  let h = 5381
+  for (let i = 0; i < seed.length; i++) {
+    h = ((h << 5) + h + seed.charCodeAt(i)) | 0
+  }
+  return `${prefix}_${Math.abs(h).toString(36)}`
+}
+
 async function bufferToHex(buffer: ArrayBuffer): Promise<string> {
   return Array.from(new Uint8Array(buffer))
     .map(b => b.toString(16).padStart(2, '0'))

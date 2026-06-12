@@ -1,5 +1,5 @@
 import type { CustomerTicket, VisitScore, Refund, QualityRule, Evidence, QualityEvent, QualityEventType, EvidenceSourceType, EventStatus } from '@/types';
-import { uid, hoursDiff, daysDiff } from '@/utils';
+import { uid, hoursDiff, daysDiff, deterministicId } from '@/utils';
 
 const TYPE_LABELS: Record<QualityEventType, string> = {
   timeout: '超时工单',
@@ -253,6 +253,25 @@ export function runAnalysis(
 
     events.push(...custEvents);
   });
+
+  const eventIdMap = new Map<string, string>();
+  for (const event of events) {
+    const eventEvidences = evidences.filter(e => e.event_id === event.id);
+    const sourceIds = eventEvidences.map(e => e.source_id).sort();
+    const seed = `${event.customer_id}:${sourceIds.join(',')}`;
+    const newId = deterministicId('evt', seed);
+    eventIdMap.set(event.id, newId);
+  }
+
+  for (const event of events) {
+    event.id = eventIdMap.get(event.id)!;
+  }
+
+  for (const evidence of evidences) {
+    if (evidence.event_id && eventIdMap.has(evidence.event_id)) {
+      evidence.event_id = eventIdMap.get(evidence.event_id)!;
+    }
+  }
 
   return { events, evidences };
 }

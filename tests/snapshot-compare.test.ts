@@ -17,7 +17,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { uid } from '../src/utils'
+import { uid, deterministicId } from '../src/utils'
 import type {
   QualityEvent,
   QualityRule,
@@ -25,6 +25,9 @@ import type {
   AnalysisSnapshot,
   QualityEventType,
   EventStatus,
+  CustomerTicket,
+  VisitScore,
+  Refund,
 } from '../src/types'
 import {
   createSnapshot,
@@ -33,6 +36,7 @@ import {
   isSnapshotEmpty,
   snapshotsAreEqual,
 } from '../src/services/snapshotService'
+import { runAnalysis } from '../src/services/analyzeService'
 
 const DEFAULT_RULES: QualityRule = {
   timeout_hours: 24,
@@ -760,6 +764,278 @@ async function runTests() {
       assert.equal(brief!.evidence_count, original.evidence_count, '证据数应一致')
       assert.equal(brief!.total_refund, original.total_refund, '退款总额应一致')
     }
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 18: 确定性事件 ID - 同一数据两次分析产生相同 ID ----
+  console.log('Test 18: 确定性事件 ID - 同一数据两次分析产生相同事件 ID')
+  try {
+    const now = new Date()
+    const tickets: CustomerTicket[] = [
+      {
+        id: 'tkt_stable_001',
+        ticket_no: 'TK-001',
+        customer_id: 'C100',
+        title: '设备故障',
+        category: '售后',
+        created_at: new Date(now.getTime() - 86400000 * 5),
+        resolved_at: new Date(now.getTime() - 86400000 * 4),
+        status: 'closed',
+      },
+      {
+        id: 'tkt_stable_002',
+        ticket_no: 'TK-002',
+        customer_id: 'C200',
+        title: '配送延迟',
+        category: '物流',
+        created_at: new Date(now.getTime() - 86400000 * 2),
+        resolved_at: new Date(now.getTime() - 86400000 * 1),
+        status: 'closed',
+      },
+    ]
+    const scores: VisitScore[] = [
+      {
+        id: 'scr_stable_001',
+        customer_id: 'C300',
+        ticket_no: 'TK-003',
+        score: 1,
+        comment: '非常差',
+        visited_at: new Date(now.getTime() - 86400000 * 3),
+      },
+    ]
+    const refunds: Refund[] = [
+      {
+        id: 'rfd_stable_001',
+        refund_no: 'RF-001',
+        customer_id: 'C400',
+        order_no: 'ORD-001',
+        amount: 999,
+        reason: '质量不达标',
+        refunded_at: new Date(now.getTime() - 86400000 * 6),
+      },
+    ]
+
+    const result1 = runAnalysis(tickets, scores, refunds, DEFAULT_RULES)
+    const result2 = runAnalysis(tickets, scores, refunds, DEFAULT_RULES)
+
+    const ids1 = result1.events.map((e) => e.id).sort()
+    const ids2 = result2.events.map((e) => e.id).sort()
+    assert.deepEqual(ids1, ids2, '两次分析应产生完全相同的事件 ID 集合')
+
+    for (let i = 0; i < result1.events.length; i++) {
+      const e1 = result1.events[i]
+      const e2 = result2.events.find((e) => e.id === e1.id)
+      assert.ok(e2, `事件 ${e1.id} 在第二次分析中应存在`)
+      assert.deepEqual(e1.types.sort(), e2!.types.sort(), `事件 ${e1.id} 类型应一致`)
+      assert.equal(e1.customer_id, e2!.customer_id, `事件 ${e1.id} 客户应一致`)
+    }
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 19: 同一数据两次分析+快照对比 - 不应误判为新增/消失 ----
+  console.log('Test 19: 同一数据两次分析+快照对比 - 事件应标记为 unchanged')
+  try {
+    const now = new Date()
+    const tickets: CustomerTicket[] = [
+      {
+        id: 'tkt_reanalysis_001',
+        ticket_no: 'TK-R01',
+        customer_id: 'C_RE_01',
+        title: '超时工单',
+        category: '售后',
+        created_at: new Date(now.getTime() - 86400000 * 10),
+        resolved_at: new Date(now.getTime() - 86400000 * 8),
+        status: 'closed',
+      },
+    ]
+    const scores: VisitScore[] = [
+      {
+        id: 'scr_reanalysis_001',
+        customer_id: 'C_RE_02',
+        ticket_no: 'TK-R02',
+        score: 2,
+        comment: '差评',
+        visited_at: new Date(now.getTime() - 86400000 * 5),
+      },
+    ]
+    const refunds: Refund[] = [
+      {
+        id: 'rfd_reanalysis_001',
+        refund_no: 'RF-R01',
+        customer_id: 'C_RE_03',
+        order_no: 'ORD-R01',
+        amount: 800,
+        reason: '退款',
+        refunded_at: new Date(now.getTime() - 86400000 * 3),
+      },
+    ]
+
+    const result1 = runAnalysis(tickets, scores, refunds, DEFAULT_RULES)
+    const snap1 = createSnapshot('第一次分析', undefined, result1.events, DEFAULT_RULES, [])
+
+    const result2 = runAnalysis(tickets, scores, refunds, DEFAULT_RULES)
+    const snap2 = createSnapshot('第二次分析', undefined, result2.events, DEFAULT_RULES, [])
+
+    const diff = computeSnapshotDiff(snap1, snap2)
+
+    assert.equal(diff.total_added, 0, '不应有误判的新增事件')
+    assert.equal(diff.total_removed, 0, '不应有误判的消失事件')
+    assert.equal(diff.total_status_changed, 0, '不应有状态变化')
+    assert.equal(diff.total_type_changed, 0, '不应有类型变化')
+    assert.equal(diff.total_unchanged, result1.events.length, '所有事件应为 unchanged')
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 20: 阈值变化后重分析+快照对比 - 真变化应正确显示 ----
+  console.log('Test 20: 阈值变化后重分析+快照对比 - 命中变化应正确识别')
+  try {
+    const now = new Date()
+    const tickets: CustomerTicket[] = [
+      {
+        id: 'tkt_threshold_001',
+        ticket_no: 'TK-T01',
+        customer_id: 'C_TH_01',
+        title: '接近超时',
+        category: '售后',
+        created_at: new Date(now.getTime() - 86400000 * 2),
+        resolved_at: new Date(now.getTime() - 86400000 * 1),
+        status: 'closed',
+      },
+    ]
+    const scores: VisitScore[] = [
+      {
+        id: 'scr_threshold_001',
+        customer_id: 'C_TH_02',
+        ticket_no: 'TK-T02',
+        score: 3,
+        comment: '一般',
+        visited_at: new Date(now.getTime() - 86400000 * 1),
+      },
+    ]
+    const refunds: Refund[] = [
+      {
+        id: 'rfd_threshold_001',
+        refund_no: 'RF-T01',
+        customer_id: 'C_TH_03',
+        order_no: 'ORD-T01',
+        amount: 600,
+        reason: '退款',
+        refunded_at: new Date(now.getTime() - 86400000 * 1),
+      },
+    ]
+
+    const rulesStrict: QualityRule = { ...DEFAULT_RULES, timeout_hours: 12, min_score: 4, high_refund_amount: 500 }
+    const rulesLoose: QualityRule = { ...DEFAULT_RULES, timeout_hours: 48, min_score: 2, high_refund_amount: 1000 }
+
+    const resultStrict = runAnalysis(tickets, scores, refunds, rulesStrict)
+    const snapStrict = createSnapshot('严格规则', undefined, resultStrict.events, rulesStrict, [])
+
+    const resultLoose = runAnalysis(tickets, scores, refunds, rulesLoose)
+    const snapLoose = createSnapshot('宽松规则', undefined, resultLoose.events, rulesLoose, [])
+
+    assert.ok(resultStrict.events.length > 0, '严格规则应有命中事件')
+    assert.ok(resultLoose.events.length < resultStrict.events.length, '宽松规则应有更少命中事件')
+
+    const diff = computeSnapshotDiff(snapStrict, snapLoose)
+
+    assert.ok(diff.total_removed > 0, '阈值放宽后应有事件消失')
+    assert.equal(diff.rule_diffs.length, 3, '应有 3 项规则差异')
+
+    const timeoutDiff = diff.rule_diffs.find((r) => r.field === 'timeout_hours')
+    assert.ok(timeoutDiff, '应有 timeout_hours 差异')
+    assert.equal(timeoutDiff!.old_value, 12, '旧值应为 12')
+    assert.equal(timeoutDiff!.new_value, 48, '新值应为 48')
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 21: deterministicId 一致性验证 ----
+  console.log('Test 21: deterministicId - 相同种子产生相同 ID，不同种子产生不同 ID')
+  try {
+    const id1 = deterministicId('evt', 'C001:tkt_001,tkt_002')
+    const id2 = deterministicId('evt', 'C001:tkt_001,tkt_002')
+    assert.equal(id1, id2, '相同种子应产生相同 ID')
+
+    const id3 = deterministicId('evt', 'C001:tkt_001,tkt_003')
+    assert.notEqual(id1, id3, '不同种子应产生不同 ID')
+
+    const id4 = deterministicId('evt', 'C002:tkt_001,tkt_002')
+    assert.notEqual(id1, id4, '不同客户应产生不同 ID')
+
+    const id5 = deterministicId('evt', 'C001:tkt_002,tkt_001')
+    assert.notEqual(id1, id5, '未排序的种子产生不同 ID（调用方负责排序）')
+
+    const sortedSeed = 'C001:' + ['tkt_001', 'tkt_002'].sort().join(',')
+    const sortedSeed2 = 'C001:' + ['tkt_002', 'tkt_001'].sort().join(',')
+    const id6 = deterministicId('evt', sortedSeed)
+    const id7 = deterministicId('evt', sortedSeed2)
+    assert.equal(id6, id7, '调用方排序后种子相同应产生相同 ID')
+
+    console.log('  ✅ 通过')
+    passed++
+  } catch (e: any) {
+    console.log(`  ❌ 失败: ${e.message}`)
+    failed++
+  }
+
+  // ---- Test 22: 状态变化后重分析+快照对比 - 已复核事件状态变化应识别 ----
+  console.log('Test 22: 状态变化后快照对比 - 人工复核状态变化应正确识别')
+  try {
+    const now = new Date()
+    const tickets: CustomerTicket[] = [
+      {
+        id: 'tkt_status_001',
+        ticket_no: 'TK-S01',
+        customer_id: 'C_ST_01',
+        title: '超时工单',
+        category: '售后',
+        created_at: new Date(now.getTime() - 86400000 * 5),
+        resolved_at: new Date(now.getTime() - 86400000 * 3),
+        status: 'closed',
+      },
+    ]
+    const scores: VisitScore[] = []
+    const refunds: Refund[] = []
+
+    const result1 = runAnalysis(tickets, scores, refunds, DEFAULT_RULES)
+
+    const eventsBefore = result1.events.map((e) => ({ ...e }))
+
+    const eventsAfter = result1.events.map((e) => ({
+      ...e,
+      status: 'reviewing' as EventStatus,
+      review_note: '正在处理',
+      reviewed_at: new Date(),
+    }))
+
+    const snap1 = createSnapshot('复核前', undefined, eventsBefore, DEFAULT_RULES, [])
+    const snap2 = createSnapshot('复核后', undefined, eventsAfter, DEFAULT_RULES, [])
+
+    const diff = computeSnapshotDiff(snap1, snap2)
+
+    assert.equal(diff.total_added, 0, '不应有新增事件')
+    assert.equal(diff.total_removed, 0, '不应有消失事件')
+    assert.equal(diff.total_status_changed, eventsBefore.length, '所有事件应有状态变化')
+    assert.equal(diff.total_unchanged, 0, '不应有未变化事件')
 
     console.log('  ✅ 通过')
     passed++
