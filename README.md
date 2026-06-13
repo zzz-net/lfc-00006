@@ -583,7 +583,7 @@ src/
 ├── utils/
 │   ├── index.ts                 工具函数（日期/CSV/哈希/字段校验）
 │   └── ruleValidator.ts         规则参数合法性校验
-├── App.tsx                      路由入口（HashRouter + 6条路由）
+├── App.tsx                      路由入口（HashRouter + 12条路由）
 ├── main.tsx                     React 根渲染
 └── index.css                    全局样式（Tailwind + 自定义主题）
 tests/
