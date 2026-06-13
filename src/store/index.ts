@@ -25,6 +25,12 @@ import type {
   ReviewPackageCauseCategory,
   ReviewPackageAuditLog,
   ImportReviewPackageResult,
+  HandoverPackage,
+  HandoverPackageStatus,
+  HandoverPriority,
+  HandoverPackageAuditLog,
+  ImportHandoverPackageResult,
+  ImportHandoverConflictResolution,
 } from '@/types'
 import { uid } from '@/utils'
 import { runAnalysis } from '@/services/analyzeService'
@@ -40,6 +46,20 @@ import {
   importReviewPackages,
   createReviewPackageAuditLog,
 } from '@/services/reviewPackageService'
+import {
+  createHandoverPackage,
+  createHandoverEventSnapshot,
+  createHandoverAuditLog,
+  addCommunicationRecord,
+  markAsCompleted,
+  undoComplete,
+  updateHandoverStatus,
+  exportHandoverPackageToJSON,
+  exportHandoverPackagesToJSON,
+  importHandoverPackages,
+  filterHandoverEvents,
+  filterHandoverPackages,
+} from '@/services/handoverPackageService'
 import { parseDate, reviveDates } from '@/utils'
 import dayjs from 'dayjs'
 
@@ -95,6 +115,8 @@ interface AppState {
   schemeAuditLogs: SchemeAuditLog[]
   reviewPackages: ReviewPackage[]
   reviewPackageAuditLogs: ReviewPackageAuditLog[]
+  handoverPackages: HandoverPackage[]
+  handoverPackageAuditLogs: HandoverPackageAuditLog[]
 
   setSelectedEvent: (id: string | null) => void
   setDrawerOpen: (open: boolean) => void
@@ -174,6 +196,42 @@ interface AppState {
   getReviewPackageAuditLogs: () => ReviewPackageAuditLog[]
 
   getReviewPackageAuditLogsByPackageId: (packageId: string) => ReviewPackageAuditLog[]
+
+  createHandoverPackage: (
+    title: string,
+    assignee: string,
+    deadline: Date | null,
+    priority: HandoverPriority,
+    description: string,
+    eventIds: string[]
+  ) => { success: boolean; error?: string; pkg?: HandoverPackage }
+
+  getHandoverPackage: (id: string) => HandoverPackage | undefined
+
+  updateHandoverPackageStatus: (id: string, status: HandoverPackageStatus) => { success: boolean; error?: string }
+
+  addHandoverCommunicationRecord: (id: string, content: string) => { success: boolean; error?: string }
+
+  markHandoverAsCompleted: (id: string) => { success: boolean; error?: string }
+
+  undoHandoverComplete: (id: string, reason: string) => { success: boolean; error?: string }
+
+  deleteHandoverPackage: (id: string) => { success: boolean; error?: string }
+
+  exportHandoverPackages: (ids?: string[]) => void
+
+  importHandoverPackages: (
+    file: File,
+    conflictResolutions?: Record<string, ImportHandoverConflictResolution>
+  ) => Promise<ImportHandoverPackageResult>
+
+  getHandoverPackageAuditLogs: () => HandoverPackageAuditLog[]
+
+  getHandoverPackageAuditLogsByPackageId: (packageId: string) => HandoverPackageAuditLog[]
+
+  filterHandoverEvents: typeof filterHandoverEvents
+
+  filterHandoverPackages: typeof filterHandoverPackages
 }
 
 function textToFile(text: string, filename: string, type: string): File {
@@ -252,6 +310,8 @@ export const useAppStore = create<AppState>()(
       schemeAuditLogs: [],
       reviewPackages: [],
       reviewPackageAuditLogs: [],
+      handoverPackages: [],
+      handoverPackageAuditLogs: [],
 
       setSelectedEvent: (id) => set((s) => ({ uiState: { ...s.uiState, selectedEventId: id, drawerOpen: id !== null } })),
       setDrawerOpen: (open) => set((s) => ({ uiState: { ...s.uiState, drawerOpen: open } })),
@@ -827,6 +887,33 @@ export const useAppStore = create<AppState>()(
             ...log,
             operated_at: log.operated_at.toISOString(),
           })),
+          handoverPackages: state.handoverPackages.map((pkg) => ({
+            ...pkg,
+            created_at: pkg.created_at.toISOString(),
+            updated_at: pkg.updated_at.toISOString(),
+            completed_at: pkg.completed_at ? pkg.completed_at.toISOString() : null,
+            deadline: pkg.deadline ? pkg.deadline.toISOString() : null,
+            event_snapshots: pkg.event_snapshots.map((s) => ({
+              ...s,
+              reviewed_at: s.reviewed_at ? s.reviewed_at.toISOString() : null,
+              closed_at: s.closed_at ? s.closed_at.toISOString() : null,
+              first_seen_at: s.first_seen_at.toISOString(),
+              last_seen_at: s.last_seen_at.toISOString(),
+              snapshotted_at: s.snapshotted_at.toISOString(),
+            })),
+            communication_records: pkg.communication_records.map((r) => ({
+              ...r,
+              created_at: r.created_at.toISOString(),
+            })),
+            undo_records: pkg.undo_records.map((r) => ({
+              ...r,
+              created_at: r.created_at.toISOString(),
+            })),
+          })),
+          handoverPackageAuditLogs: state.handoverPackageAuditLogs.map((log) => ({
+            ...log,
+            operated_at: log.operated_at.toISOString(),
+          })),
         })
         const ts = dayjs().format('YYYYMMDD_HHmmss')
         downloadBlob(new Blob([backup], { type: 'application/json' }), `full_backup_${ts}.json`)
@@ -854,6 +941,8 @@ export const useAppStore = create<AppState>()(
           const restoredAuditLogs: SchemeAuditLog[] = s.schemeAuditLogs || []
           const restoredReviewPackages: ReviewPackage[] = s.reviewPackages || []
           const restoredReviewPackageAuditLogs: ReviewPackageAuditLog[] = s.reviewPackageAuditLogs || []
+          const restoredHandoverPackages: HandoverPackage[] = s.handoverPackages || []
+          const restoredHandoverPackageAuditLogs: HandoverPackageAuditLog[] = s.handoverPackageAuditLogs || []
 
           const hasDefaultScheme = restoredSchemes.some((sc: RuleScheme) => sc.is_default)
           const schemes = hasDefaultScheme ? restoredSchemes : [createDefaultScheme(), ...restoredSchemes]
@@ -877,6 +966,8 @@ export const useAppStore = create<AppState>()(
             schemeAuditLogs: restoredAuditLogs,
             reviewPackages: restoredReviewPackages,
             reviewPackageAuditLogs: restoredReviewPackageAuditLogs,
+            handoverPackages: restoredHandoverPackages,
+            handoverPackageAuditLogs: restoredHandoverPackageAuditLogs,
           })
           return {
             eventCount: events.length,
@@ -887,6 +978,8 @@ export const useAppStore = create<AppState>()(
             auditLogCount: restoredAuditLogs.length,
             hasReviewPackages: restoredReviewPackages.length > 0,
             reviewPackageCount: restoredReviewPackages.length,
+            hasHandoverPackages: restoredHandoverPackages.length > 0,
+            handoverPackageCount: restoredHandoverPackages.length,
           }
         } catch (e: any) {
           return {
@@ -899,6 +992,8 @@ export const useAppStore = create<AppState>()(
             auditLogCount: 0,
             hasReviewPackages: false,
             reviewPackageCount: 0,
+            hasHandoverPackages: false,
+            handoverPackageCount: 0,
           }
         }
       },
@@ -1159,6 +1254,211 @@ export const useAppStore = create<AppState>()(
         return get().reviewPackageAuditLogs.filter((log) => log.package_id === packageId)
       },
 
+      createHandoverPackage: (title, assignee, deadline, priority, description, eventIds) => {
+        const trimmedTitle = title.trim()
+        if (!trimmedTitle) {
+          return { success: false, error: '交接包标题不能为空' }
+        }
+        if (!assignee.trim()) {
+          return { success: false, error: '接手人不能为空' }
+        }
+        if (eventIds.length === 0) {
+          return { success: false, error: '请至少选择一个质量事件' }
+        }
+
+        const { events, handoverPackages } = get()
+        const existingTitle = handoverPackages.find((p) => p.title === trimmedTitle)
+        if (existingTitle) {
+          return { success: false, error: '已存在同名交接包，请使用其他标题' }
+        }
+
+        const selectedEvents = events.filter((e) => eventIds.includes(e.id))
+        if (selectedEvents.length !== eventIds.length) {
+          const missing = eventIds.filter((id) => !events.find((e) => e.id === id))
+          return { success: false, error: `部分事件不存在：${missing.join(', ')}` }
+        }
+
+        const pkg = createHandoverPackage(
+          trimmedTitle,
+          assignee,
+          deadline,
+          priority,
+          description,
+          selectedEvents
+        )
+
+        const auditLog = createHandoverAuditLog('create', pkg, {
+          note: `创建交接包，包含 ${selectedEvents.length} 个事件`,
+        })
+
+        set((s) => ({
+          handoverPackages: [pkg, ...s.handoverPackages],
+          handoverPackageAuditLogs: [auditLog, ...s.handoverPackageAuditLogs],
+        }))
+
+        return { success: true, pkg }
+      },
+
+      getHandoverPackage: (id) => {
+        return get().handoverPackages.find((p) => p.id === id)
+      },
+
+      updateHandoverPackageStatus: (id, status) => {
+        const { handoverPackages } = get()
+        const pkg = handoverPackages.find((p) => p.id === id)
+        if (!pkg) {
+          return { success: false, error: '交接包不存在' }
+        }
+        if (pkg.status === status) {
+          return { success: false, error: '状态未变化' }
+        }
+
+        const { package: updated, auditLog } = updateHandoverStatus(pkg, status)
+
+        set((s) => ({
+          handoverPackages: s.handoverPackages.map((p) => (p.id === id ? updated : p)),
+          handoverPackageAuditLogs: [auditLog, ...s.handoverPackageAuditLogs],
+        }))
+
+        return { success: true }
+      },
+
+      addHandoverCommunicationRecord: (id, content) => {
+        const trimmedContent = content.trim()
+        if (!trimmedContent) {
+          return { success: false, error: '沟通记录内容不能为空' }
+        }
+
+        const { handoverPackages } = get()
+        const pkg = handoverPackages.find((p) => p.id === id)
+        if (!pkg) {
+          return { success: false, error: '交接包不存在' }
+        }
+
+        const { package: updated, auditLog } = addCommunicationRecord(pkg, trimmedContent)
+
+        set((s) => ({
+          handoverPackages: s.handoverPackages.map((p) => (p.id === id ? updated : p)),
+          handoverPackageAuditLogs: [auditLog, ...s.handoverPackageAuditLogs],
+        }))
+
+        return { success: true }
+      },
+
+      markHandoverAsCompleted: (id) => {
+        const { handoverPackages } = get()
+        const pkg = handoverPackages.find((p) => p.id === id)
+        if (!pkg) {
+          return { success: false, error: '交接包不存在' }
+        }
+        if (pkg.status === 'completed') {
+          return { success: false, error: '交接包已是已完成状态' }
+        }
+
+        const { package: updated, auditLog } = markAsCompleted(pkg)
+
+        set((s) => ({
+          handoverPackages: s.handoverPackages.map((p) => (p.id === id ? updated : p)),
+          handoverPackageAuditLogs: [auditLog, ...s.handoverPackageAuditLogs],
+        }))
+
+        return { success: true }
+      },
+
+      undoHandoverComplete: (id, reason) => {
+        const trimmedReason = reason.trim()
+        if (!trimmedReason) {
+          return { success: false, error: '撤销原因不能为空' }
+        }
+
+        const { handoverPackages } = get()
+        const pkg = handoverPackages.find((p) => p.id === id)
+        if (!pkg) {
+          return { success: false, error: '交接包不存在' }
+        }
+        if (pkg.status !== 'completed') {
+          return { success: false, error: '只有已完成状态的交接包才能撤销' }
+        }
+
+        const { package: updated, auditLog } = undoComplete(pkg, trimmedReason)
+
+        set((s) => ({
+          handoverPackages: s.handoverPackages.map((p) => (p.id === id ? updated : p)),
+          handoverPackageAuditLogs: [auditLog, ...s.handoverPackageAuditLogs],
+        }))
+
+        return { success: true }
+      },
+
+      deleteHandoverPackage: (id) => {
+        const { handoverPackages } = get()
+        const pkg = handoverPackages.find((p) => p.id === id)
+        if (!pkg) {
+          return { success: false, error: '交接包不存在' }
+        }
+
+        const auditLog = createHandoverAuditLog('delete', pkg, {
+          note: '删除交接包',
+        })
+
+        set((s) => ({
+          handoverPackages: s.handoverPackages.filter((p) => p.id !== id),
+          handoverPackageAuditLogs: [auditLog, ...s.handoverPackageAuditLogs],
+        }))
+
+        return { success: true }
+      },
+
+      exportHandoverPackages: (ids) => {
+        const { handoverPackages } = get()
+        let packagesToExport = handoverPackages
+        if (ids && ids.length > 0) {
+          packagesToExport = handoverPackages.filter((p) => ids.includes(p.id))
+        }
+        if (packagesToExport.length === 0) {
+          return
+        }
+        const json = exportHandoverPackagesToJSON(packagesToExport)
+        const ts = dayjs().format('YYYYMMDD_HHmmss')
+        const filename = ids && ids.length === 1
+          ? `handover_package_${packagesToExport[0].title.replace(/[^\w\u4e00-\u9fa5]/g, '_')}_${ts}.json`
+          : `handover_packages_${ts}.json`
+        downloadBlob(new Blob([json], { type: 'application/json' }), filename)
+      },
+
+      importHandoverPackages: async (file, conflictResolutions) => {
+        const text = await file.text()
+        const { handoverPackages, events } = get()
+        const result = importHandoverPackages(text, handoverPackages, events, conflictResolutions)
+
+        if (result.imported.length > 0) {
+          const auditLogs = result.imported.map((pkg) =>
+            createHandoverAuditLog('import', pkg, {
+              importSource: file.name,
+              note: `从文件 ${file.name} 导入交接包`,
+            })
+          )
+
+          set((s) => ({
+            handoverPackages: [...result.imported, ...s.handoverPackages],
+            handoverPackageAuditLogs: [...auditLogs, ...s.handoverPackageAuditLogs],
+          }))
+        }
+
+        return result
+      },
+
+      getHandoverPackageAuditLogs: () => {
+        return get().handoverPackageAuditLogs
+      },
+
+      getHandoverPackageAuditLogsByPackageId: (packageId) => {
+        return get().handoverPackageAuditLogs.filter((log) => log.package_id === packageId)
+      },
+
+      filterHandoverEvents,
+      filterHandoverPackages,
+
       resetAll: () => {
         set({
           tickets: [],
@@ -1177,6 +1477,8 @@ export const useAppStore = create<AppState>()(
           schemeAuditLogs: [],
           reviewPackages: [],
           reviewPackageAuditLogs: [],
+          handoverPackages: [],
+          handoverPackageAuditLogs: [],
         })
       },
     }),
@@ -1199,6 +1501,8 @@ export const useAppStore = create<AppState>()(
         schemeAuditLogs: state.schemeAuditLogs,
         reviewPackages: state.reviewPackages,
         reviewPackageAuditLogs: state.reviewPackageAuditLogs,
+        handoverPackages: state.handoverPackages,
+        handoverPackageAuditLogs: state.handoverPackageAuditLogs,
       }),
     }
   )

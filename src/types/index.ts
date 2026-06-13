@@ -352,3 +352,111 @@ export interface ImportReviewPackageResult {
   warnings: string[]
   errors: string[]
 }
+
+// ========== 责任交接包类型定义 ==========
+
+export type HandoverPackageStatus = 'pending' | 'processing' | 'completed' | 'cancelled'
+
+export type HandoverPriority = 'low' | 'medium' | 'high' | 'urgent'
+
+export interface HandoverEventSnapshot {
+  id: string
+  customer_id: string
+  title: string
+  types: QualityEventType[]
+  status: EventStatus
+  review_note: string
+  reviewed_at: Date | null
+  closed_at: Date | null
+  first_seen_at: Date
+  last_seen_at: Date
+  evidence_count: number
+  total_refund: number
+  snapshotted_at: Date
+}
+
+export interface HandoverCommunicationRecord {
+  id: string
+  content: string
+  operator: string
+  created_at: Date
+}
+
+export interface HandoverUndoRecord {
+  id: string
+  reason: string
+  operator: string
+  created_at: Date
+  previous_status: HandoverPackageStatus
+}
+
+export interface HandoverPackage {
+  id: string
+  title: string
+  assignee: string
+  deadline: Date | null
+  priority: HandoverPriority
+  description: string
+  status: HandoverPackageStatus
+  event_snapshots: HandoverEventSnapshot[]
+  event_ids: string[]
+  communication_records: HandoverCommunicationRecord[]
+  undo_records: HandoverUndoRecord[]
+  created_at: Date
+  updated_at: Date
+  completed_at: Date | null
+}
+
+export type HandoverPackageActionType = 'create' | 'add_record' | 'complete' | 'undo_complete' | 'import' | 'delete' | 'update'
+
+export interface HandoverPackageAuditLog {
+  id: string
+  action: HandoverPackageActionType
+  package_id: string
+  package_title: string
+  operator: string
+  operated_at: Date
+  old_status?: HandoverPackageStatus
+  new_status?: HandoverPackageStatus
+  record_content?: string
+  undo_reason?: string
+  import_source?: string
+  note?: string
+}
+
+export type ImportHandoverConflictType = 
+  | 'duplicate_id' 
+  | 'duplicate_title' 
+  | 'event_not_found' 
+  | 'event_status_conflict'
+
+export interface ImportHandoverPackageConflict {
+  type: ImportHandoverConflictType
+  package_id: string
+  package_title: string
+  event_id?: string
+  event_title?: string
+  expected_status?: EventStatus
+  actual_status?: EventStatus
+  existing_title?: string
+  existing_id?: string
+}
+
+export type ImportHandoverConflictResolution = 'skip' | 'rename' | 'import_as_snapshot'
+
+export interface ImportHandoverPackageResult {
+  success: boolean
+  imported: HandoverPackage[]
+  skipped: ImportHandoverPackageConflict[]
+  warnings: string[]
+  errors: string[]
+}
+
+export interface HandoverEventFilter {
+  statuses?: EventStatus[]
+  types?: QualityEventType[]
+  customer_id?: string
+  min_refund?: number
+  max_refund?: number
+  search?: string
+}

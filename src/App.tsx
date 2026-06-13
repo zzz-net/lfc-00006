@@ -9,6 +9,9 @@ import ExportPage from "@/pages/ExportPage";
 import ReviewPackagesPage from "@/pages/ReviewPackagesPage";
 import ReviewPackageCreatePage from "@/pages/ReviewPackageCreatePage";
 import ReviewPackageDetailPage from "@/pages/ReviewPackageDetailPage";
+import HandoverPackagesPage from "@/pages/HandoverPackagesPage";
+import HandoverPackageCreatePage from "@/pages/HandoverPackageCreatePage";
+import HandoverPackageDetailPage from "@/pages/HandoverPackageDetailPage";
 
 export default function App() {
   return (
@@ -24,6 +27,9 @@ export default function App() {
           <Route path="/review-packages" element={<ReviewPackagesPage />} />
           <Route path="/review-packages/create" element={<ReviewPackageCreatePage />} />
           <Route path="/review-packages/:id" element={<ReviewPackageDetailPage />} />
+          <Route path="/handover-packages" element={<HandoverPackagesPage />} />
+          <Route path="/handover-packages/create" element={<HandoverPackageCreatePage />} />
+          <Route path="/handover-packages/:id" element={<HandoverPackageDetailPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>
